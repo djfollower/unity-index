@@ -1,0 +1,22 @@
+package com.github.dungphan.unityindex.constants
+
+object ToolNames {
+    const val FIND_REFERENCES = "ide_find_references"
+    const val FIND_DEFINITION = "ide_find_definition"
+    const val TYPE_HIERARCHY = "ide_type_hierarchy"
+    const val CALL_HIERARCHY = "ide_call_hierarchy"
+    const val FIND_IMPLEMENTATIONS = "ide_find_implementations"
+    const val FIND_SYMBOL = "ide_find_symbol"
+    const val FIND_SUPER_METHODS = "ide_find_super_methods"
+    const val FILE_STRUCTURE = "ide_file_structure"
+    const val FIND_CLASS = "ide_find_class"
+    const val FIND_FILE = "ide_find_file"
+    const val SEARCH_TEXT = "ide_search_text"
+    const val READ_FILE = "ide_read_file"
+
+    const val DIAGNOSTICS = "ide_diagnostics"
+
+    const val INDEX_STATUS = "ide_index_status"
+    const val SYNC_FILES = "ide_sync_files"
+    const val BUILD_PROJECT = "ide_build_project"
+}
