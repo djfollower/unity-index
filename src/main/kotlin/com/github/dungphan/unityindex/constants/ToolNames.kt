@@ -19,4 +19,13 @@ object ToolNames {
     const val INDEX_STATUS = "ide_index_status"
     const val SYNC_FILES = "ide_sync_files"
     const val BUILD_PROJECT = "ide_build_project"
+
+    // Unity-specific tools
+    const val GET_ASSEMBLY_MAP = "unity_get_assembly_map"
+    const val GET_COMPONENT_USAGE = "unity_get_component_usage"
+    const val GET_UNITY_EVENT_BINDINGS = "unity_get_unity_event_bindings"
+    const val FIND_GETCOMPONENT_PATTERNS = "unity_find_getcomponent_patterns"
+    const val GET_SERIALIZED_FIELD_VALUES = "unity_get_serialized_field_values"
+    const val GET_PROJECT_CONTEXT = "unity_get_project_context"
+    const val GET_API_USAGE = "unity_get_api_usage"
 }

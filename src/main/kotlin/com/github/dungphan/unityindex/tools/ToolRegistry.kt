@@ -15,6 +15,13 @@ import com.github.dungphan.unityindex.tools.navigation.SearchTextTool
 import com.github.dungphan.unityindex.tools.project.BuildProjectTool
 import com.github.dungphan.unityindex.tools.project.GetIndexStatusTool
 import com.github.dungphan.unityindex.tools.project.SyncFilesTool
+import com.github.dungphan.unityindex.tools.unity.GetAssemblyMapTool
+import com.github.dungphan.unityindex.tools.unity.GetComponentUsageTool
+import com.github.dungphan.unityindex.tools.unity.FindGetComponentPatternsTool
+import com.github.dungphan.unityindex.tools.unity.GetApiUsageTool
+import com.github.dungphan.unityindex.tools.unity.GetProjectContextTool
+import com.github.dungphan.unityindex.tools.unity.GetSerializedFieldValuesTool
+import com.github.dungphan.unityindex.tools.unity.GetUnityEventBindingsTool
 import com.intellij.openapi.diagnostic.logger
 import java.util.concurrent.ConcurrentHashMap
 
@@ -67,6 +74,7 @@ class ToolRegistry {
         LanguageHandlerRegistry.registerHandlers()
 
         registerUniversalTools()
+        registerUnityTools()
         registerLanguageNavigationTools()
 
         LOG.info("Registered ${tools.size} built-in MCP tools")
@@ -101,6 +109,18 @@ class ToolRegistry {
         register(ReadFileTool())
 
         LOG.info("Registered universal tools")
+    }
+
+    private fun registerUnityTools() {
+        register(GetAssemblyMapTool())
+        register(GetComponentUsageTool())
+        register(GetUnityEventBindingsTool())
+        register(FindGetComponentPatternsTool())
+        register(GetSerializedFieldValuesTool())
+        register(GetProjectContextTool())
+        register(GetApiUsageTool())
+
+        LOG.info("Registered Unity-specific tools")
     }
 
     private data class ConditionalTool(
