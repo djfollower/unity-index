@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Unity Index MCP Server — a JetBrains Rider plugin that exposes IDE code intelligence for Unity C# projects to AI agents via the Model Context Protocol (MCP). Based on [jetbrains-index-mcp-plugin](https://github.com/hechtcarmel/jetbrains-index-mcp-plugin).
 
+## Critical Design Principles
+
+1. **C# / Rider / Unity first.** This plugin exists to serve Unity C# projects running in JetBrains Rider. All features, tools, and handlers MUST prioritize C# and Unity support. Other languages can be skipped entirely.
+
+2. **Exploit Rider's index, never reimplement it.** The plugin's value is exposing Rider's existing code intelligence (PSI, indexes, inspections, navigation) to AI agents via MCP. ALWAYS leverage Rider IDE APIs and its built-in analysis. NEVER implement custom parsers, analyzers, or tools that directly interact with script files — delegate to Rider's infrastructure instead.
+
 ## Build Commands
 
 ```bash

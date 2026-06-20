@@ -11,8 +11,13 @@ import com.github.dungphan.unityindex.tools.AbstractMcpTool
 import com.github.dungphan.unityindex.tools.models.CallElement
 import com.github.dungphan.unityindex.tools.models.CallHierarchyResult
 import com.github.dungphan.unityindex.tools.schema.SchemaBuilder
+import com.github.dungphan.unityindex.util.PlatformFallbacks
+import com.github.dungphan.unityindex.util.ProjectUtils
+import com.github.dungphan.unityindex.util.PsiUtils
+import com.github.dungphan.unityindex.util.RiderProtocolHost
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
+import com.intellij.psi.PsiDocumentManager
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -36,7 +41,7 @@ class CallHierarchyTool : AbstractMcpTool() {
     override val description = """
         Build a call hierarchy tree for a method/function. Use to trace execution flow—find what calls this method (callers) or what this method calls (callees).
 
-        Languages: Java, Kotlin, Python, JavaScript, TypeScript, PHP, Rust.
+        Languages: Java, Kotlin, C#, Python, JavaScript, TypeScript, PHP, Rust.
 
         Rust note: "callers" direction works well; "callees" direction may have limited results due to Rust plugin PSI resolution constraints.
 
@@ -73,6 +78,16 @@ class CallHierarchyTool : AbstractMcpTool() {
         val direction = arguments["direction"]?.jsonPrimitive?.content
             ?: return createErrorResult("Missing required parameter: direction")
         val depth = (arguments["depth"]?.jsonPrimitive?.int ?: DEFAULT_DEPTH).coerceIn(1, MAX_DEPTH)
+
+        val file = optionalStringArg(arguments, ParamNames.FILE)
+        val line = arguments[ParamNames.LINE]?.jsonPrimitive?.int
+        val column = arguments[ParamNames.COLUMN]?.jsonPrimitive?.int
+
+        if (file != null && line != null && column != null) {
+            val rdResult = tryRiderCallHierarchy(project, file, line, column, direction, depth)
+            if (rdResult != null) return rdResult
+        }
+
         val rawScope = rawScopeValue(arguments[ParamNames.SCOPE])
         val scope = try {
             BuiltInSearchScopeResolver.parse(arguments, BuiltInSearchScope.PROJECT_FILES)
@@ -97,16 +112,12 @@ class CallHierarchyTool : AbstractMcpTool() {
 
             // Find appropriate handler for this element's language
             val handler = LanguageHandlerRegistry.getCallHierarchyHandler(element)
-            if (handler == null) {
-                return@suspendingReadAction createErrorResult(
-                    "No call hierarchy handler available for language: ${element.language.id}. " +
-                    "Supported languages: ${LanguageHandlerRegistry.getSupportedLanguagesForCallHierarchy()}"
-                )
-            }
 
-            ProgressManager.checkCanceled() // Allow cancellation before heavy operation
+            ProgressManager.checkCanceled()
 
-            val hierarchyData = handler.getCallHierarchy(element, project, direction, depth, scope, excludeGenerated)
+            val hierarchyData = handler?.getCallHierarchy(element, project, direction, depth, scope, excludeGenerated)
+                ?: PlatformFallbacks.getCallHierarchy(element, project, direction, depth, scope, excludeGenerated)
+
             if (hierarchyData == null) {
                 val isSymbolMode = optionalStringArg(arguments, ParamNames.LANGUAGE) != null
                 return@suspendingReadAction createErrorResult(
@@ -135,5 +146,45 @@ class CallHierarchyTool : AbstractMcpTool() {
             language = data.language,
             children = data.children?.map { convertToCallElement(it) }
         )
+    }
+
+    private suspend fun tryRiderCallHierarchy(
+        project: Project,
+        filePath: String,
+        line: Int,
+        column: Int,
+        direction: String,
+        depth: Int
+    ): ToolCallResult? {
+        val virtualFile = PsiUtils.resolveVirtualFileAnywhere(project, filePath) ?: return null
+        if (!RiderProtocolHost.shouldUseRiderProtocol(virtualFile)) return null
+
+        val document = suspendingReadAction {
+            PsiDocumentManager.getInstance(project).getDocument(
+                PsiUtils.getPsiFile(project, filePath) ?: return@suspendingReadAction null
+            )
+        } ?: return null
+
+        val offset = getOffset(document, line, column) ?: return null
+
+        val result = RiderProtocolHost.callHierarchyViaRd(
+            project, virtualFile, offset, direction, depth
+        ) ?: return null
+
+        fun convertRdElement(el: RiderProtocolHost.RdCallHierarchyElementResult): CallElement {
+            return CallElement(
+                name = el.name,
+                file = el.filePath?.let { ProjectUtils.getRelativePath(project, it) } ?: "",
+                line = 0,
+                column = 0,
+                language = "C#",
+                children = el.children?.map { convertRdElement(it) }
+            )
+        }
+
+        return createJsonResult(CallHierarchyResult(
+            element = convertRdElement(result),
+            calls = result.children?.map { convertRdElement(it) } ?: emptyList()
+        ))
     }
 }

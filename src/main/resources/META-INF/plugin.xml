@@ -20,8 +20,10 @@ instead of raw text grep, dramatically reducing token usage and improving AI age
 </ul>
 ]]>    </description>
 
-    <!-- Platform dependency (required) -->
+    <!-- Rider dependency (required — this plugin only runs in Rider) -->
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lang</depends>
+    <depends>com.intellij.modules.rider</depends>
 
     <resource-bundle>messages.McpBundle</resource-bundle>
 

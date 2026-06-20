@@ -4,6 +4,7 @@ import com.github.dungphan.unityindex.handlers.createMatcher
 import com.github.dungphan.unityindex.handlers.createNameFilter
 import com.github.dungphan.unityindex.handlers.BuiltInSearchScope
 import com.github.dungphan.unityindex.handlers.BuiltInSearchScopeResolver
+import com.github.dungphan.unityindex.handlers.PopupFaithfulSymbolSearch
 import com.github.dungphan.unityindex.constants.ParamNames
 import com.github.dungphan.unityindex.constants.ToolNames
 import com.github.dungphan.unityindex.server.PaginationService
@@ -178,12 +179,6 @@ class FindClassTool : AbstractMcpTool() {
         }
     }
 
-    /**
-     * Re-executes the search to collect more results beyond the initial cache.
-     * This re-scans from the beginning, skipping already-seen keys — O(total_results) per extension.
-     * This is unavoidable: IntelliJ's search APIs (ReferencesSearch, PsiSearchHelper, etc.)
-     * don't support offset-based iteration or resumption.
-     */
     private fun extendSearchClasses(
         project: Project,
         query: String,
@@ -212,9 +207,6 @@ class FindClassTool : AbstractMcpTool() {
             }
     }
 
-    /**
-     * Search for classes using CLASS_EP_NAME index.
-     */
     private fun searchClasses(
         project: Project,
         pattern: String,
@@ -225,10 +217,24 @@ class FindClassTool : AbstractMcpTool() {
         matcher: MinusculeMatcher,
         languageFilter: String? = null
     ): List<SymbolMatch> {
+        // Try popup-based search first (uses GotoClassModel2, works for all IDE-supported
+        // languages including C# in Rider where CLASS_EP_NAME contributors may not cover it).
+        try {
+            val popupResults = PopupFaithfulSymbolSearch.searchClasses(project, pattern, searchScope, limit)
+            val results = popupResults.candidates
+                .mapNotNull { candidate -> convertToSymbolMatch(candidate.item, project, searchScope) }
+                .filter { languageFilter == null || it.language.equals(languageFilter, ignoreCase = true) }
+                .distinctBy { "${it.file}:${it.line}:${it.column}:${it.name}" }
+            if (results.isNotEmpty()) {
+                return results.take(limit)
+            }
+        } catch (e: Exception) {
+            LOG.debug("Popup-based class search failed, falling back to contributor iteration: ${e.message}", e)
+        }
+
+        // Fallback: iterate CLASS_EP_NAME contributors directly
         val results = mutableListOf<SymbolMatch>()
         val seen = mutableSetOf<String>()
-
-        // Use CLASS_EP_NAME for class-only search
         val contributors = ChooseByNameContributor.CLASS_EP_NAME.extensionList
 
         for (contributor in contributors) {

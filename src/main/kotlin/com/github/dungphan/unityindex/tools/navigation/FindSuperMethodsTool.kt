@@ -10,8 +10,15 @@ import com.github.dungphan.unityindex.tools.models.MethodInfo
 import com.github.dungphan.unityindex.tools.models.SuperMethodInfo
 import com.github.dungphan.unityindex.tools.models.SuperMethodsResult
 import com.github.dungphan.unityindex.tools.schema.SchemaBuilder
+import com.github.dungphan.unityindex.util.PlatformFallbacks
+import com.github.dungphan.unityindex.util.ProjectUtils
+import com.github.dungphan.unityindex.util.PsiUtils
+import com.github.dungphan.unityindex.util.RiderProtocolHost
 import com.intellij.openapi.project.Project
+import com.intellij.psi.PsiDocumentManager
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Tool for finding super methods across multiple languages.
@@ -27,7 +34,7 @@ class FindSuperMethodsTool : AbstractMcpTool() {
     override val description = """
         Find parent methods that a method overrides or implements. Use to navigate up the inheritance chain—from implementation to interface, or from override to original declaration.
 
-        Languages: Java, Kotlin, Python, JavaScript, TypeScript, PHP.
+        Languages: Java, Kotlin, C#, Python, JavaScript, TypeScript, PHP.
 
         NOT supported for Rust: Rust uses trait implementations rather than classical inheritance, so there are no "super methods" in the traditional sense. Use ide_find_definition or ide_type_hierarchy instead.
 
@@ -52,21 +59,24 @@ class FindSuperMethodsTool : AbstractMcpTool() {
     override suspend fun doExecute(project: Project, arguments: JsonObject): ToolCallResult {
         requireSmartMode(project)
 
+        val file = optionalStringArg(arguments, ParamNames.FILE)
+        val line = arguments[ParamNames.LINE]?.jsonPrimitive?.int
+        val column = arguments[ParamNames.COLUMN]?.jsonPrimitive?.int
+
+        if (file != null && line != null && column != null) {
+            val rdResult = tryRiderGotoSuperMethod(project, file, line, column)
+            if (rdResult != null) return rdResult
+        }
+
         return suspendingReadAction {
             val element = resolveElementFromArguments(project, arguments, allowLibraryFilesForPosition = true).getOrElse {
                 return@suspendingReadAction createErrorResult(it.message ?: ErrorMessages.COULD_NOT_RESOLVE_SYMBOL)
             }
 
-            // Find appropriate handler for this element's language
             val handler = LanguageHandlerRegistry.getSuperMethodsHandler(element)
-            if (handler == null) {
-                return@suspendingReadAction createErrorResult(
-                    "No super methods handler available for language: ${element.language.id}. " +
-                    "Supported languages: ${LanguageHandlerRegistry.getSupportedLanguagesForSuperMethods()}"
-                )
-            }
+            val superMethodsData = handler?.findSuperMethods(element, project)
+                ?: PlatformFallbacks.findSuperMethods(element, project)
 
-            val superMethodsData = handler.findSuperMethods(element, project)
             if (superMethodsData == null) {
                 val isSymbolMode = optionalStringArg(arguments, ParamNames.LANGUAGE) != null
                 return@suspendingReadAction createErrorResult(
@@ -103,5 +113,53 @@ class FindSuperMethodsTool : AbstractMcpTool() {
                 totalCount = superMethodsData.hierarchy.size
             ))
         }
+    }
+
+    private suspend fun tryRiderGotoSuperMethod(
+        project: Project,
+        filePath: String,
+        line: Int,
+        column: Int
+    ): ToolCallResult? {
+        val virtualFile = PsiUtils.resolveVirtualFileAnywhere(project, filePath) ?: return null
+        if (!RiderProtocolHost.shouldUseRiderProtocol(virtualFile)) return null
+
+        val document = suspendingReadAction {
+            PsiDocumentManager.getInstance(project).getDocument(
+                PsiUtils.getPsiFile(project, filePath) ?: return@suspendingReadAction null
+            )
+        } ?: return null
+
+        val offset = getOffset(document, line, column) ?: return null
+
+        val result = RiderProtocolHost.gotoSuperMethodViaRd(project, virtualFile, offset) ?: return null
+
+        val defFile = ProjectUtils.getRelativePath(project, result.filePath)
+        val fileName = defFile.substringAfterLast('/').substringBeforeLast('.')
+
+        return createJsonResult(SuperMethodsResult(
+            method = MethodInfo(
+                name = fileName,
+                signature = fileName,
+                containingClass = "unknown",
+                file = filePath,
+                line = line,
+                column = column,
+                language = "C#"
+            ),
+            hierarchy = listOf(SuperMethodInfo(
+                name = fileName,
+                signature = result.preview.lines().firstOrNull()?.trim() ?: fileName,
+                containingClass = fileName,
+                containingClassKind = "class",
+                file = defFile,
+                line = result.line,
+                column = result.column,
+                isInterface = false,
+                depth = 1,
+                language = "C#"
+            )),
+            totalCount = 1
+        ))
     }
 }

@@ -40,7 +40,7 @@ dependencies {
     }
 
     intellijPlatform {
-        intellijIdea(providers.gradleProperty("platformVersion"))
+        rider(providers.gradleProperty("platformVersion"), useInstaller = false)
 
         bundledPlugins(providers.gradleProperty("platformBundledPlugins").map {
             it.split(',').filter { s -> s.isNotBlank() }

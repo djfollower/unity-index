@@ -7,7 +7,9 @@ import com.github.dungphan.unityindex.server.models.ToolCallResult
 import com.github.dungphan.unityindex.tools.AbstractMcpTool
 import com.github.dungphan.unityindex.tools.models.DefinitionResult
 import com.github.dungphan.unityindex.tools.schema.SchemaBuilder
+import com.github.dungphan.unityindex.util.ProjectUtils
 import com.github.dungphan.unityindex.util.PsiUtils
+import com.github.dungphan.unityindex.util.RiderProtocolHost
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiDirectory
@@ -56,6 +58,15 @@ class FindDefinitionTool : AbstractMcpTool() {
             .coerceIn(1, MAX_ALLOWED_PREVIEW_LINES)
 
         requireSmartMode(project)
+
+        val file = optionalStringArg(arguments, ParamNames.FILE)
+        val line = arguments[ParamNames.LINE]?.jsonPrimitive?.int
+        val column = arguments[ParamNames.COLUMN]?.jsonPrimitive?.int
+
+        if (file != null && line != null && column != null) {
+            val rdResult = tryRiderGotoDefinition(project, file, line, column)
+            if (rdResult != null) return rdResult
+        }
 
         return suspendingReadAction {
             val element = resolveElementFromArguments(project, arguments, allowLibraryFilesForPosition = true).getOrElse {
@@ -171,5 +182,36 @@ class FindDefinitionTool : AbstractMcpTool() {
                 astPath = PsiUtils.getAstPath(effectiveTarget)
             ))
         }
+    }
+
+    private suspend fun tryRiderGotoDefinition(
+        project: Project,
+        filePath: String,
+        line: Int,
+        column: Int
+    ): ToolCallResult? {
+        val virtualFile = PsiUtils.resolveVirtualFileAnywhere(project, filePath) ?: return null
+        if (!RiderProtocolHost.shouldUseRiderProtocol(virtualFile)) return null
+
+        val document = suspendingReadAction {
+            PsiDocumentManager.getInstance(project).getDocument(
+                PsiUtils.getPsiFile(project, filePath) ?: return@suspendingReadAction null
+            )
+        } ?: return null
+
+        val offset = getOffset(document, line, column) ?: return null
+
+        val result = RiderProtocolHost.gotoDefinitionViaRd(project, virtualFile, offset) ?: return null
+
+        val defFile = ProjectUtils.getRelativePath(project, result.filePath)
+
+        return createJsonResult(DefinitionResult(
+            file = defFile,
+            line = result.line,
+            column = result.column,
+            preview = result.preview,
+            symbolName = defFile.substringAfterLast('/').substringBeforeLast('.'),
+            astPath = emptyList()
+        ))
     }
 }

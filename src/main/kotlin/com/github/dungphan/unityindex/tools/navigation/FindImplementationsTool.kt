@@ -12,8 +12,13 @@ import com.github.dungphan.unityindex.tools.AbstractMcpTool
 import com.github.dungphan.unityindex.tools.models.ImplementationLocation
 import com.github.dungphan.unityindex.tools.models.ImplementationResult
 import com.github.dungphan.unityindex.tools.schema.SchemaBuilder
+import com.github.dungphan.unityindex.util.PlatformFallbacks
+import com.github.dungphan.unityindex.util.ProjectUtils
+import com.github.dungphan.unityindex.util.PsiUtils
+import com.github.dungphan.unityindex.util.RiderProtocolHost
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.util.PsiModificationTracker
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonElement
@@ -21,6 +26,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
@@ -43,7 +49,7 @@ class FindImplementationsTool : AbstractMcpTool() {
     override val description = """
         Find all implementations of an interface, abstract class, or abstract method. Use to discover concrete implementations when working with abstractions.
 
-        Languages: Java, Kotlin, Python, JavaScript, TypeScript, PHP, Rust.
+        Languages: Java, Kotlin, C#, Python, JavaScript, TypeScript, PHP, Rust.
 
         Returns: list of implementing classes/methods with file paths, line/column numbers, and kind (class/method).
 
@@ -90,6 +96,15 @@ class FindImplementationsTool : AbstractMcpTool() {
             }
         }
 
+        val file = optionalStringArg(arguments, ParamNames.FILE)
+        val line = arguments[ParamNames.LINE]?.jsonPrimitive?.int
+        val column = arguments[ParamNames.COLUMN]?.jsonPrimitive?.int
+
+        if (file != null && line != null && column != null) {
+            val rdResult = tryRiderFindImplementations(project, file, line, column)
+            if (rdResult != null) return rdResult
+        }
+
         val pageSize = resolvePageSize(arguments, DEFAULT_PAGE_SIZE)
         val rawScope = rawScopeValue(arguments[ParamNames.SCOPE])
         val scope = try {
@@ -108,14 +123,9 @@ class FindImplementationsTool : AbstractMcpTool() {
             }
 
             val handler = LanguageHandlerRegistry.getImplementationsHandler(element)
-            if (handler == null) {
-                return@suspendingReadAction null to createErrorResult(
-                    "No implementations handler available for language: ${element.language.id}. " +
-                    "Supported languages: ${LanguageHandlerRegistry.getSupportedLanguagesForImplementations()}"
-                )
-            }
+            val implementations = handler?.findImplementations(element, project, scope, excludeGenerated)
+                ?: PlatformFallbacks.findImplementations(element, project, scope, excludeGenerated)
 
-            val implementations = handler.findImplementations(element, project, scope, excludeGenerated)
             if (implementations == null) {
                 val isSymbolMode = optionalStringArg(arguments, ParamNames.LANGUAGE) != null
                 return@suspendingReadAction null to createErrorResult(
@@ -172,5 +182,45 @@ class FindImplementationsTool : AbstractMcpTool() {
         }
     }
 
+    private suspend fun tryRiderFindImplementations(
+        project: Project,
+        filePath: String,
+        line: Int,
+        column: Int
+    ): ToolCallResult? {
+        val virtualFile = PsiUtils.resolveVirtualFileAnywhere(project, filePath) ?: return null
+        if (!RiderProtocolHost.shouldUseRiderProtocol(virtualFile)) return null
 
+        val document = suspendingReadAction {
+            PsiDocumentManager.getInstance(project).getDocument(
+                PsiUtils.getPsiFile(project, filePath) ?: return@suspendingReadAction null
+            )
+        } ?: return null
+
+        val offset = getOffset(document, line, column) ?: return null
+
+        val results = RiderProtocolHost.findImplementationsViaRd(project, virtualFile, offset) ?: return null
+
+        val implementations = results.map { impl ->
+            ImplementationLocation(
+                name = impl.name,
+                file = ProjectUtils.getRelativePath(project, impl.filePath),
+                line = impl.line,
+                column = impl.column,
+                kind = impl.kind,
+                language = "C#"
+            )
+        }
+
+        return createJsonResult(ImplementationResult(
+            implementations = implementations,
+            totalCount = implementations.size,
+            nextCursor = null,
+            hasMore = false,
+            totalCollected = implementations.size,
+            offset = 0,
+            pageSize = implementations.size,
+            stale = false
+        ))
+    }
 }

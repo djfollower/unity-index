@@ -10,8 +10,12 @@ import com.github.dungphan.unityindex.tools.AbstractMcpTool
 import com.github.dungphan.unityindex.tools.models.TypeElement
 import com.github.dungphan.unityindex.tools.models.TypeHierarchyResult
 import com.github.dungphan.unityindex.tools.schema.SchemaBuilder
+import com.github.dungphan.unityindex.util.PlatformFallbacks
+import com.github.dungphan.unityindex.util.PsiUtils
+import com.github.dungphan.unityindex.util.RiderProtocolHost
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
+import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonElement
@@ -36,7 +40,7 @@ class TypeHierarchyTool : AbstractMcpTool() {
     override val description = """
         Get the complete inheritance hierarchy for a class or interface. Use when you need to understand class relationships, find parent classes, or discover all subclasses.
 
-        Languages: Java, Kotlin, Python, JavaScript, TypeScript, PHP, Rust.
+        Languages: Java, Kotlin, C#, Python, JavaScript, TypeScript, PHP, Rust.
 
         Rust note: className parameter not supported for Rust; use file + line + column instead.
 
@@ -60,8 +64,16 @@ class TypeHierarchyTool : AbstractMcpTool() {
     override suspend fun doExecute(project: Project, arguments: JsonObject): ToolCallResult {
         requireSmartMode(project)
 
-        val className = arguments["className"]?.jsonPrimitive?.content
         val file = arguments["file"]?.jsonPrimitive?.content
+        val line = arguments["line"]?.jsonPrimitive?.int
+        val column = arguments["column"]?.jsonPrimitive?.int
+
+        if (file != null && line != null && column != null) {
+            val rdResult = tryRiderTypeHierarchy(project, file, line, column)
+            if (rdResult != null) return rdResult
+        }
+
+        val className = arguments["className"]?.jsonPrimitive?.content
         val rawScope = rawScopeValue(arguments[ParamNames.SCOPE])
         val scope = try {
             BuiltInSearchScopeResolver.parse(arguments, BuiltInSearchScope.PROJECT_FILES)
@@ -86,16 +98,12 @@ class TypeHierarchyTool : AbstractMcpTool() {
 
             // Find appropriate handler for this element's language
             val handler = LanguageHandlerRegistry.getTypeHierarchyHandler(element)
-            if (handler == null) {
-                return@suspendingReadAction createErrorResult(
-                    "No type hierarchy handler available for language: ${element.language.id}. " +
-                    "Supported languages: ${LanguageHandlerRegistry.getSupportedLanguagesForTypeHierarchy()}"
-                )
-            }
 
-            ProgressManager.checkCanceled() // Allow cancellation before heavy operation
+            ProgressManager.checkCanceled()
 
-            val hierarchyData = handler.getTypeHierarchy(element, project, scope, excludeGenerated)
+            val hierarchyData = handler?.getTypeHierarchy(element, project, scope, excludeGenerated)
+                ?: PlatformFallbacks.getTypeHierarchy(element, project, scope, excludeGenerated)
+
             if (hierarchyData == null) {
                 return@suspendingReadAction createErrorResult("No class/type found at the specified position.")
             }
@@ -137,5 +145,64 @@ class TypeHierarchyTool : AbstractMcpTool() {
             language = data.language,
             supertypes = data.supertypes?.map { convertToTypeElement(it) }
         )
+    }
+
+    private suspend fun tryRiderTypeHierarchy(
+        project: Project,
+        filePath: String,
+        line: Int,
+        column: Int
+    ): ToolCallResult? {
+        val virtualFile = PsiUtils.resolveVirtualFileAnywhere(project, filePath) ?: return null
+        if (!RiderProtocolHost.shouldUseRiderProtocol(virtualFile)) return null
+
+        val document = suspendingReadAction {
+            PsiDocumentManager.getInstance(project).getDocument(
+                PsiUtils.getPsiFile(project, filePath) ?: return@suspendingReadAction null
+            )
+        } ?: return null
+
+        val offset = getOffset(document, line, column) ?: return null
+
+        val result = RiderProtocolHost.typeHierarchyViaRd(project, virtualFile, offset) ?: return null
+
+        val baseItem = result.items.firstOrNull { it.isBase }
+        val baseElement = TypeElement(
+            name = baseItem?.typeName ?: result.baseTypeName,
+            file = filePath,
+            kind = "class",
+            language = "C#",
+            supertypes = null
+        )
+
+        val supertypes = mutableListOf<TypeElement>()
+        val subtypes = mutableListOf<TypeElement>()
+
+        // Build tree from flat items using parentId
+        val baseId = baseItem?.id
+        for (item in result.items) {
+            if (item.isBase) continue
+            val element = TypeElement(
+                name = item.typeName,
+                file = item.containerInfo,
+                kind = "class",
+                language = "C#",
+                supertypes = null
+            )
+            if (baseId != null && item.parentId == baseId) {
+                subtypes.add(element)
+            } else if (item.parentId != null && item.parentId != baseId) {
+                // Items whose parent is not the base are likely supertypes or deeper subtypes
+                supertypes.add(element)
+            } else {
+                subtypes.add(element)
+            }
+        }
+
+        return createJsonResult(TypeHierarchyResult(
+            element = baseElement,
+            supertypes = supertypes,
+            subtypes = subtypes
+        ))
     }
 }

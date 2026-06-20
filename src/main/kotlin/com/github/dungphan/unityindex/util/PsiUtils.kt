@@ -1,5 +1,7 @@
 package com.github.dungphan.unityindex.util
 
+import com.intellij.codeInsight.navigation.actions.GotoDeclarationHandler
+import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.OrderEnumerator
 import com.intellij.openapi.util.SystemInfo
@@ -12,6 +14,7 @@ import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
+import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiNamedElement
 import com.intellij.psi.PsiReference
 import java.nio.file.InvalidPathException
@@ -19,30 +22,16 @@ import java.nio.file.Path
 
 object PsiUtils {
 
+    private val LOG = logger<PsiUtils>()
+
     /**
      * Default depth for searching parent chain for references.
      * 3 levels covers common cases: identifier -> expression -> call expression.
      */
     private const val DEFAULT_PARENT_SEARCH_DEPTH = 3
 
-    /**
-     * Resolves the target element from a position, using semantic reference resolution.
-     *
-     * This is the correct way to find what a position "refers to":
-     * 1. First tries `element.reference.resolve()` to follow references semantically
-     * 2. If no direct reference, walks up parent chain looking for references
-     * 3. Falls back to [findNamedElement] for declarations (when cursor is ON a declaration)
-     *
-     * **Why this matters:**
-     * When the cursor is on a method call like `myService.doWork()`, the leaf element
-     * is the identifier "doWork". Using [findNamedElement] would walk up the tree and
-     * find the *containing* method, not the *referenced* method. This function correctly
-     * resolves through the reference system to find the actual `doWork` method declaration.
-     *
-     * @param element The leaf PSI element at a position (from `psiFile.findElementAt(offset)`)
-     * @return The resolved target element (declaration), or null if resolution fails
-     */
     fun resolveTargetElement(element: PsiElement): PsiElement? {
+        // 1. Standard PsiReference resolution
         val reference = element.reference
         if (reference != null) {
             val resolved = reference.resolve()
@@ -55,7 +44,31 @@ object PsiUtils {
             if (resolved != null) return resolved
         }
 
+        // 2. GotoDeclarationHandler EP — Rider registers handlers here for C# where
+        //    standard PsiReference resolution is not available.
+        val declarationTarget = resolveViaGotoDeclarationHandlers(element)
+        if (declarationTarget != null) return declarationTarget
+
+        // 3. Fallback: walk up to find the enclosing named element (cursor on a declaration)
         return findNamedElement(element)
+    }
+
+    private fun resolveViaGotoDeclarationHandlers(element: PsiElement): PsiElement? {
+        try {
+            val offset = element.textOffset
+            for (handler in GotoDeclarationHandler.EP_NAME.extensionList) {
+                try {
+                    val targets = handler.getGotoDeclarationTargets(element, offset, null)
+                    if (targets != null && targets.isNotEmpty()) {
+                        return targets[0]
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        } catch (e: Throwable) {
+            LOG.debug("GotoDeclarationHandler EP not available", e)
+        }
+        return null
     }
 
     /**
@@ -284,7 +297,7 @@ object PsiUtils {
         while (current != null) {
             // Exclude PsiFile - it's too high-level to be a useful "named element" target
             // and would cause accidental file deletion when targeting whitespace/comments
-            if (current is PsiNamedElement && current !is PsiFile && current.name != null) {
+            if (current is PsiNamedElement && current !is PsiFile && current !is PsiDirectory && current.name != null) {
                 return current
             }
             current = current.parent

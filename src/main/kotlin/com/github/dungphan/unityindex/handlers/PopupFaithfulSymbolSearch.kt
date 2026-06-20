@@ -5,6 +5,7 @@ import com.intellij.ide.util.gotoByName.ChooseByNameModel
 import com.intellij.ide.util.gotoByName.ChooseByNameModelEx
 import com.intellij.ide.util.gotoByName.ChooseByNamePopup
 import com.intellij.ide.util.gotoByName.ChooseByNameViewModel
+import com.intellij.ide.util.gotoByName.GotoClassModel2
 import com.intellij.ide.util.gotoByName.GotoSymbolModel2
 import com.intellij.navigation.NavigationItem
 import com.intellij.openapi.application.ApplicationManager
@@ -12,6 +13,7 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.progress.util.ProgressIndicatorBase
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.registry.Registry
 import com.intellij.psi.PsiDocumentManager
@@ -20,12 +22,12 @@ import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.util.indexing.FindSymbolParameters
 import com.intellij.util.indexing.IdFilter
 
-internal data class PopupSearchCandidate(
+data class PopupSearchCandidate(
     val item: NavigationItem,
     val fullName: String?
 )
 
-internal data class PopupSearchResult(
+data class PopupSearchResult(
     val candidates: List<PopupSearchCandidate>,
     val isQualifiedQuery: Boolean
 )
@@ -36,7 +38,7 @@ internal data class PopupSearchResult(
  * This preserves popup query parsing, full-name matching, and result ordering while staying usable
  * from MCP tool execution without constructing any UI.
  */
-internal object PopupFaithfulSymbolSearch {
+object PopupFaithfulSymbolSearch {
 
     private val LOG = logger<PopupFaithfulSymbolSearch>()
 
@@ -49,39 +51,63 @@ internal object PopupFaithfulSymbolSearch {
         val disposable = Disposer.newDisposable("PopupFaithfulSymbolSearch")
         try {
             val model = GotoSymbolModel2(project, disposable)
-            val context = resolveSearchContext(project)
-            val provider = ChooseByNameModelEx.getItemProvider(model, context)
-            val viewModel = HeadlessChooseByNameViewModel(project, model, limit)
-            val transformedPattern = viewModel.transformPattern(pattern)
-            val localPattern = buildLocalPattern(model, transformedPattern)
-            val isQualifiedQuery = hasQualifiedSeparator(model, transformedPattern)
-            val idFilter = IdFilter.getProjectIdFilter(project, scope.isSearchInLibraries)
-            @Suppress("DEPRECATION")
-            val parameters = FindSymbolParameters(pattern, localPattern, scope, idFilter)
-            val candidates = mutableListOf<PopupSearchCandidate>()
-            val indicator = ProgressIndicatorBase()
-
-            if (provider is ChooseByNameInScopeItemProvider) {
-                provider.filterElementsWithWeights(viewModel, parameters, indicator) { found ->
-                    val item = found.item as? NavigationItem ?: return@filterElementsWithWeights true
-                    candidates.add(PopupSearchCandidate(item = item, fullName = model.getFullName(item)))
-                    candidates.size < limit
-                }
-            } else {
-                provider.filterElements(viewModel, pattern, scope.isSearchInLibraries, indicator) { item ->
-                    val navigationItem = item as? NavigationItem ?: return@filterElements true
-                    candidates.add(PopupSearchCandidate(item = navigationItem, fullName = model.getFullName(navigationItem)))
-                    candidates.size < limit
-                }
-            }
-
-            return PopupSearchResult(
-                candidates = candidates,
-                isQualifiedQuery = isQualifiedQuery
-            )
+            return searchWithModel(project, model, pattern, scope, limit)
         } finally {
             Disposer.dispose(disposable)
         }
+    }
+
+    fun searchClasses(
+        project: Project,
+        pattern: String,
+        scope: GlobalSearchScope,
+        limit: Int
+    ): PopupSearchResult {
+        val model = GotoClassModel2(project)
+        try {
+            return searchWithModel(project, model, pattern, scope, limit)
+        } finally {
+            (model as? Disposable)?.let { Disposer.dispose(it) }
+        }
+    }
+
+    private fun searchWithModel(
+        project: Project,
+        model: ChooseByNameModel,
+        pattern: String,
+        scope: GlobalSearchScope,
+        limit: Int
+    ): PopupSearchResult {
+        val context = resolveSearchContext(project)
+        val provider = ChooseByNameModelEx.getItemProvider(model, context)
+        val viewModel = HeadlessChooseByNameViewModel(project, model, limit)
+        val transformedPattern = viewModel.transformPattern(pattern)
+        val localPattern = buildLocalPattern(model, transformedPattern)
+        val isQualifiedQuery = hasQualifiedSeparator(model, transformedPattern)
+        val idFilter = IdFilter.getProjectIdFilter(project, scope.isSearchInLibraries)
+        @Suppress("DEPRECATION")
+        val parameters = FindSymbolParameters(pattern, localPattern, scope, idFilter)
+        val candidates = mutableListOf<PopupSearchCandidate>()
+        val indicator = ProgressIndicatorBase()
+
+        if (provider is ChooseByNameInScopeItemProvider) {
+            provider.filterElementsWithWeights(viewModel, parameters, indicator) { found ->
+                val item = found.item as? NavigationItem ?: return@filterElementsWithWeights true
+                candidates.add(PopupSearchCandidate(item = item, fullName = model.getFullName(item)))
+                candidates.size < limit
+            }
+        } else {
+            provider.filterElements(viewModel, pattern, scope.isSearchInLibraries, indicator) { item ->
+                val navigationItem = item as? NavigationItem ?: return@filterElements true
+                candidates.add(PopupSearchCandidate(item = navigationItem, fullName = model.getFullName(navigationItem)))
+                candidates.size < limit
+            }
+        }
+
+        return PopupSearchResult(
+            candidates = candidates,
+            isQualifiedQuery = isQualifiedQuery
+        )
     }
 
     private fun resolveSearchContext(project: Project): PsiElement? = runCatching {

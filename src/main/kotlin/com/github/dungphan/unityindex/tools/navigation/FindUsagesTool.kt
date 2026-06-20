@@ -13,29 +13,31 @@ import com.github.dungphan.unityindex.tools.AbstractMcpTool
 import com.github.dungphan.unityindex.tools.models.FindUsagesResult
 import com.github.dungphan.unityindex.tools.models.UsageLocation
 import com.github.dungphan.unityindex.tools.schema.SchemaBuilder
+import com.github.dungphan.unityindex.util.ProjectUtils
 import com.github.dungphan.unityindex.util.PsiUtils
+import com.github.dungphan.unityindex.util.RiderProtocolHost
+import com.intellij.find.findUsages.FindUsagesHandlerFactory
+import com.intellij.find.findUsages.FindUsagesHandlerBase
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiNamedElement
 import com.intellij.psi.SmartPointerManager
 import com.intellij.psi.search.searches.ReferencesSearch
 import com.intellij.psi.util.PsiModificationTracker
+import com.intellij.usageView.UsageInfo
 import com.intellij.util.Processor
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 
 class FindUsagesTool : AbstractMcpTool() {
 
@@ -43,6 +45,14 @@ class FindUsagesTool : AbstractMcpTool() {
         private val LOG = logger<FindUsagesTool>()
         private const val DEFAULT_MAX_RESULTS = 100
         private const val MAX_PAGE_SIZE = PaginationService.MAX_PAGE_SIZE
+
+        private val PROJECT_METADATA_EXTENSIONS = setOf(
+            "csproj", "vbproj", "fsproj", "sln", "props", "targets",
+            "vcxproj", "shproj", "projitems"
+        )
+
+        private fun isProjectMetadataFile(file: VirtualFile): Boolean =
+            file.extension?.lowercase() in PROJECT_METADATA_EXTENSIONS
 
         internal fun searchInfrastructureErrorMessage(error: Throwable): String {
             val detail = error.message?.takeIf { it.isNotBlank() }?.let { ": $it" } ?: ""
@@ -105,9 +115,6 @@ class FindUsagesTool : AbstractMcpTool() {
 
         val pageSize = resolvePageSize(arguments, DEFAULT_MAX_RESULTS, aliases = arrayOf("maxResults"))
         val collectLimit = maxOf(PaginationService.DEFAULT_OVERCOLLECT, pageSize)
-        // Generated DI factories / *_MembersInjector classes are included by default so valid
-        // runtime references (Dagger, MapStruct, gRPC, serializers) are not missed. Callers can
-        // pass includeGenerated=false to drop generated output when it dominates results.
         val excludeGenerated = resolveExcludeGenerated(arguments, default = true)
         val rawScope = rawScopeValue(arguments[ParamNames.SCOPE])
         val scope = try {
@@ -119,16 +126,25 @@ class FindUsagesTool : AbstractMcpTool() {
         }
         requireSmartMode(project)
 
+        val file = optionalStringArg(arguments, ParamNames.FILE)
+        val line = arguments[ParamNames.LINE]?.jsonPrimitive?.int
+        val column = arguments[ParamNames.COLUMN]?.jsonPrimitive?.int
+
+        if (file != null && line != null && column != null) {
+            val rdResult = tryRiderFindUsages(project, file, line, column, pageSize)
+            if (rdResult != null) return rdResult
+        }
+
         val cursorToken = suspendingReadAction {
             val element = resolveElementFromArguments(project, arguments, allowLibraryFilesForPosition = true).getOrElse {
                 return@suspendingReadAction null to createErrorResult(it.message ?: ErrorMessages.COULD_NOT_RESOLVE_SYMBOL)
             }
 
-            // Symbol-based resolution returns the declaration directly (PsiNamedElement).
-            // Position-based resolution returns a leaf token that needs reference resolution.
             val targetElement = element as? PsiNamedElement
                 ?: (PsiUtils.resolveTargetElement(element)
                     ?: return@suspendingReadAction null to createErrorResult(ErrorMessages.NO_NAMED_ELEMENT))
+
+            LOG.info("FindUsages target: ${targetElement.javaClass.simpleName} name='${(targetElement as? PsiNamedElement)?.name}' text='${targetElement.text?.take(80)}' file=${targetElement.containingFile?.name}")
 
             val usages = ConcurrentLinkedQueue<UsageLocation>()
             val totalFound = AtomicInteger(0)
@@ -136,45 +152,66 @@ class FindUsagesTool : AbstractMcpTool() {
             val searchScope = BuiltInSearchScopeResolver.resolveGlobalScope(project, scope, excludeGenerated)
 
             try {
-                ReferencesSearch.search(targetElement, searchScope).forEach(Processor { reference ->
-                    ProgressManager.checkCanceled()
-
-                    val refElement = reference.element
-                    val refFile = refElement.containingFile?.virtualFile
-                    if (refFile != null && searchScope.contains(refFile)) {
-                        val total = totalFound.incrementAndGet()
-
-                        if (total <= collectLimit) {
-                            val document = PsiDocumentManager.getInstance(project)
-                                .getDocument(refElement.containingFile)
-                            if (document != null) {
-                                val lineNumber = document.getLineNumber(refElement.textOffset) + 1
-                                val columnNumber = refElement.textOffset -
-                                    document.getLineStartOffset(lineNumber - 1) + 1
-
-                                val lineText = document.getText(
-                                    TextRange(
-                                        document.getLineStartOffset(lineNumber - 1),
-                                        document.getLineEndOffset(lineNumber - 1)
-                                    )
-                                ).trim()
-
-                                usages.add(UsageLocation(
-                                    file = getRelativePath(project, refFile),
-                                    line = lineNumber,
-                                    column = columnNumber,
-                                    context = lineText,
-                                    type = classifyUsage(refElement),
-                                    astPath = PsiUtils.getAstPath(refElement)
-                                ))
+                val handler = findUsagesHandler(project, targetElement)
+                if (handler != null) {
+                    LOG.info("FindUsages: using FindUsagesHandler (${handler.javaClass.simpleName})")
+                    val options = handler.getFindUsagesOptions(null)
+                    handler.processElementUsages(targetElement, Processor { usageInfo ->
+                        ProgressManager.checkCanceled()
+                        val refElement = usageInfo.element ?: return@Processor true
+                        if (refElement == targetElement) return@Processor true
+                        val refFile = refElement.containingFile?.virtualFile
+                        if (refFile != null && searchScope.contains(refFile) && !isProjectMetadataFile(refFile)) {
+                            val total = totalFound.incrementAndGet()
+                            if (total <= collectLimit) {
+                                usageInfoToLocation(project, usageInfo, refElement)?.let { usages.add(it) }
                             }
+                            total < totalCountLimit
+                        } else {
+                            true
                         }
+                    }, options)
+                } else {
+                    ReferencesSearch.search(targetElement, searchScope).forEach(Processor { reference ->
+                        ProgressManager.checkCanceled()
 
-                        total < totalCountLimit
-                    } else {
-                        true
-                    }
-                })
+                        val refElement = reference.element
+                        val refFile = refElement.containingFile?.virtualFile
+                        if (refFile != null && searchScope.contains(refFile) && !isProjectMetadataFile(refFile)) {
+                            val total = totalFound.incrementAndGet()
+
+                            if (total <= collectLimit) {
+                                val document = PsiDocumentManager.getInstance(project)
+                                    .getDocument(refElement.containingFile)
+                                if (document != null) {
+                                    val lineNumber = document.getLineNumber(refElement.textOffset) + 1
+                                    val columnNumber = refElement.textOffset -
+                                        document.getLineStartOffset(lineNumber - 1) + 1
+
+                                    val lineText = document.getText(
+                                        TextRange(
+                                            document.getLineStartOffset(lineNumber - 1),
+                                            document.getLineEndOffset(lineNumber - 1)
+                                        )
+                                    ).trim()
+
+                                    usages.add(UsageLocation(
+                                        file = getRelativePath(project, refFile),
+                                        line = lineNumber,
+                                        column = columnNumber,
+                                        context = lineText,
+                                        type = classifyUsage(refElement),
+                                        astPath = PsiUtils.getAstPath(refElement)
+                                    ))
+                                }
+                            }
+
+                            total < totalCountLimit
+                        } else {
+                            true
+                        }
+                    })
+                }
             } catch (e: LinkageError) {
                 LOG.warn("Reference search failed for ${targetElement.javaClass.name}", e)
                 return@suspendingReadAction null to createErrorResult(searchInfrastructureErrorMessage(e))
@@ -231,12 +268,45 @@ class FindUsagesTool : AbstractMcpTool() {
         }
     }
 
-    /**
-     * Re-executes the search to collect more results beyond the initial cache.
-     * This re-scans from the beginning, skipping already-seen keys — O(total_results) per extension.
-     * This is unavoidable: IntelliJ's search APIs (ReferencesSearch, PsiSearchHelper, etc.)
-     * don't support offset-based iteration or resumption.
-     */
+    private fun findUsagesHandler(project: Project, element: PsiElement): FindUsagesHandlerBase? {
+        try {
+            for (factory in FindUsagesHandlerFactory.EP_NAME.getExtensions(project)) {
+                try {
+                    if (factory.canFindUsages(element)) {
+                        val handler = factory.createFindUsagesHandler(element, false)
+                        if (handler != null) return handler
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        } catch (e: Throwable) {
+            LOG.warn("FindUsagesHandlerFactory EP not available, falling back to ReferencesSearch", e)
+        }
+        return null
+    }
+
+    private fun usageInfoToLocation(project: Project, usageInfo: UsageInfo, refElement: PsiElement): UsageLocation? {
+        val refFile = refElement.containingFile?.virtualFile ?: return null
+        val document = PsiDocumentManager.getInstance(project).getDocument(refElement.containingFile) ?: return null
+        val offset = usageInfo.navigationOffset
+        val lineNumber = document.getLineNumber(offset) + 1
+        val columnNumber = offset - document.getLineStartOffset(lineNumber - 1) + 1
+        val lineText = document.getText(
+            TextRange(
+                document.getLineStartOffset(lineNumber - 1),
+                document.getLineEndOffset(lineNumber - 1)
+            )
+        ).trim()
+        return UsageLocation(
+            file = getRelativePath(project, refFile),
+            line = lineNumber,
+            column = columnNumber,
+            context = lineText,
+            type = classifyUsage(refElement),
+            astPath = PsiUtils.getAstPath(refElement)
+        )
+    }
+
     private fun extendFindUsages(
         project: Project,
         targetElement: PsiElement,
@@ -250,40 +320,66 @@ class FindUsagesTool : AbstractMcpTool() {
         val searchScope = BuiltInSearchScopeResolver.resolveGlobalScope(project, scope, excludeGenerated)
 
         try {
-            ReferencesSearch.search(targetElement, searchScope).forEach(Processor { reference ->
-                ProgressManager.checkCanceled()
-                val refElement = reference.element
-                val refFile = refElement.containingFile?.virtualFile
-                if (refFile != null && searchScope.contains(refFile)) {
-                    val document = PsiDocumentManager.getInstance(project).getDocument(refElement.containingFile)
-                    if (document != null) {
-                        val lineNumber = document.getLineNumber(refElement.textOffset) + 1
-                        val columnNumber = refElement.textOffset - document.getLineStartOffset(lineNumber - 1) + 1
-                        val key = "${getRelativePath(project, refFile)}:$lineNumber:$columnNumber"
-
+            val handler = findUsagesHandler(project, targetElement)
+            if (handler != null) {
+                val options = handler.getFindUsagesOptions(null)
+                handler.processElementUsages(targetElement, Processor { usageInfo ->
+                    ProgressManager.checkCanceled()
+                    val refElement = usageInfo.element ?: return@Processor true
+                    if (refElement == targetElement) return@Processor true
+                    val refFile = refElement.containingFile?.virtualFile
+                    if (refFile != null && searchScope.contains(refFile) && !isProjectMetadataFile(refFile)) {
+                        val location = usageInfoToLocation(project, usageInfo, refElement) ?: return@Processor true
+                        val key = "${location.file}:${location.line}:${location.column}"
                         if (key !in seenKeys) {
                             val slot = count.incrementAndGet()
                             if (slot <= limit) {
-                                val lineText = document.getText(
-                                    TextRange(document.getLineStartOffset(lineNumber - 1), document.getLineEndOffset(lineNumber - 1))
-                                ).trim()
-                                val usage = UsageLocation(
-                                    file = getRelativePath(project, refFile),
-                                    line = lineNumber,
-                                    column = columnNumber,
-                                    context = lineText,
-                                    type = classifyUsage(refElement),
-                                    astPath = PsiUtils.getAstPath(refElement)
-                                )
-                                newResults.add(PaginationService.SerializedResult(key, json.encodeToJsonElement(usage)))
+                                newResults.add(PaginationService.SerializedResult(key, json.encodeToJsonElement(location)))
                             }
                             slot < limit
                         } else {
                             true
                         }
+                    } else {
+                        true
+                    }
+                }, options)
+            } else {
+                ReferencesSearch.search(targetElement, searchScope).forEach(Processor { reference ->
+                    ProgressManager.checkCanceled()
+                    val refElement = reference.element
+                    val refFile = refElement.containingFile?.virtualFile
+                    if (refFile != null && searchScope.contains(refFile) && !isProjectMetadataFile(refFile)) {
+                        val document = PsiDocumentManager.getInstance(project).getDocument(refElement.containingFile)
+                        if (document != null) {
+                            val lineNumber = document.getLineNumber(refElement.textOffset) + 1
+                            val columnNumber = refElement.textOffset - document.getLineStartOffset(lineNumber - 1) + 1
+                            val key = "${getRelativePath(project, refFile)}:$lineNumber:$columnNumber"
+
+                            if (key !in seenKeys) {
+                                val slot = count.incrementAndGet()
+                                if (slot <= limit) {
+                                    val lineText = document.getText(
+                                        TextRange(document.getLineStartOffset(lineNumber - 1), document.getLineEndOffset(lineNumber - 1))
+                                    ).trim()
+                                    val usage = UsageLocation(
+                                        file = getRelativePath(project, refFile),
+                                        line = lineNumber,
+                                        column = columnNumber,
+                                        context = lineText,
+                                        type = classifyUsage(refElement),
+                                        astPath = PsiUtils.getAstPath(refElement)
+                                    )
+                                    newResults.add(PaginationService.SerializedResult(key, json.encodeToJsonElement(usage)))
+                                }
+                                slot < limit
+                            } else {
+                                true
+                            }
+                        } else true
                     } else true
-                } else true
-            })
+                })
+            }
         } catch (e: LinkageError) {
             LOG.warn("Reference search pagination failed for ${targetElement.javaClass.name}", e)
             throw IllegalStateException(searchInfrastructureErrorMessage(e), e)
@@ -307,5 +403,55 @@ class FindUsagesTool : AbstractMcpTool() {
             }
     }
 
+    private suspend fun tryRiderFindUsages(
+        project: Project,
+        filePath: String,
+        line: Int,
+        column: Int,
+        pageSize: Int
+    ): ToolCallResult? {
+        val virtualFile = PsiUtils.resolveVirtualFileAnywhere(project, filePath) ?: return null
+        if (!RiderProtocolHost.shouldUseRiderProtocol(virtualFile)) return null
 
+        val document = suspendingReadAction {
+            PsiUtils.getPsiFile(project, filePath)?.let {
+                PsiDocumentManager.getInstance(project).getDocument(it)
+            }
+        } ?: return null
+
+        val offset = getOffset(document, line, column) ?: return null
+
+        val rdUsages = RiderProtocolHost.findUsagesViaRd(project, virtualFile, offset) ?: return null
+
+        val usages = rdUsages.map { usage ->
+            val relPath = ProjectUtils.getRelativePath(project, usage.filePath)
+            val type = when {
+                usage.isWrite -> UsageTypes.FIELD_ACCESS
+                usage.isRead -> UsageTypes.REFERENCE
+                else -> UsageTypes.REFERENCE
+            }
+            UsageLocation(
+                file = relPath,
+                line = usage.line,
+                column = usage.column,
+                context = usage.text.trim(),
+                type = type,
+                astPath = usage.groupTexts
+            )
+        }.distinctBy { "${it.file}:${it.line}:${it.column}" }
+
+        val displayUsages = usages.take(pageSize)
+
+        return createJsonResult(FindUsagesResult(
+            usages = displayUsages,
+            totalCount = usages.size,
+            truncated = usages.size > pageSize,
+            nextCursor = null,
+            hasMore = usages.size > pageSize,
+            totalCollected = usages.size,
+            offset = 0,
+            pageSize = pageSize,
+            stale = false
+        ))
+    }
 }
