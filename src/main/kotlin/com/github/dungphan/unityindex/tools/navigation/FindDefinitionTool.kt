@@ -15,7 +15,6 @@ import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiNamedElement
-import com.intellij.psi.search.GlobalSearchScope
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
@@ -30,17 +29,13 @@ class FindDefinitionTool : AbstractMcpTool() {
     override val name = ToolNames.FIND_DEFINITION
 
     override val description = """
-        Navigate to where a symbol is defined (Go to Definition). Use when you see a symbol reference and need to find its declaration—works for classes, methods, variables, imports.
+        Navigate to where a symbol is defined (Go to Definition). Use when you see a symbol reference and need to find its declaration—works for classes, methods, variables, using directives.
 
         Returns: file path, line/column of definition, code preview, and symbol name.
 
-        Target (mutually exclusive):
-        - file + line + column: position-based lookup
-        - language + symbol: fully qualified symbol reference (supported languages: ${supportedSymbolReferenceLanguagesDescription()})
+        Target: file + line + column (position-based lookup).
 
-        Example: {"file": "src/Main.java", "line": 15, "column": 10}
-        Example: {"language": "Java", "symbol": "com.example.MyClass#processData(String)"}
-        Example: {"language": "PHP", "symbol": "\\App\\Service\\UserService::find()"}
+        Example: {"file": "Assets/Scripts/PlayerController.cs", "line": 15, "column": 10}
     """.trimIndent()
 
     override val inputSchema: JsonObject = SchemaBuilder.tool()
@@ -79,11 +74,9 @@ class FindDefinitionTool : AbstractMcpTool() {
                 ?: (PsiUtils.resolveTargetElement(element)
                     ?: return@suspendingReadAction createErrorResult(ErrorMessages.SYMBOL_NOT_RESOLVED))
 
-            // Prefer source files (.java) over compiled files (.class) for library classes
             val targetElement = PsiUtils.getNavigationElement(resolvedElement)
 
-            // Try the target element first, then its navigationElement (for Kotlin light classes
-            // and import directives where the resolved element may be a compiled class without a virtual file)
+            // Try the target element first, then its navigationElement
             val effectiveTarget = if (targetElement.containingFile?.virtualFile != null) {
                 targetElement
             } else {
@@ -95,42 +88,17 @@ class FindDefinitionTool : AbstractMcpTool() {
                 }
             }
 
-            // Handle package/directory references (e.g., cursor on package segment in import statement)
+            // Handle directory references
             if (effectiveTarget is PsiDirectory) {
                 val dirPath = getRelativePath(project, effectiveTarget.virtualFile)
                 return@suspendingReadAction createJsonResult(DefinitionResult(
                     file = dirPath,
                     line = 1,
                     column = 1,
-                    preview = "Package directory: $dirPath",
+                    preview = "Directory: $dirPath",
                     symbolName = effectiveTarget.name,
                     astPath = PsiUtils.getAstPath(effectiveTarget)
                 ))
-            }
-            // PsiPackage is Java-plugin-only; use reflection to avoid NoClassDefFoundError in non-Java IDEs
-            try {
-                val psiPackageClass = Class.forName("com.intellij.psi.PsiPackage")
-                if (psiPackageClass.isInstance(effectiveTarget)) {
-                    val qualifiedName = psiPackageClass.getMethod("getQualifiedName")
-                        .invoke(effectiveTarget) as? String ?: "unknown"
-                    val dirs = psiPackageClass
-                        .getMethod("getDirectories", GlobalSearchScope::class.java)
-                        .invoke(effectiveTarget, GlobalSearchScope.projectScope(project)) as Array<*>
-                    val dir = dirs.firstOrNull() as? PsiDirectory
-                    if (dir != null) {
-                        val dirPath = getRelativePath(project, dir.virtualFile)
-                        return@suspendingReadAction createJsonResult(DefinitionResult(
-                            file = dirPath,
-                            line = 1,
-                            column = 1,
-                            preview = "Package: $qualifiedName",
-                            symbolName = qualifiedName,
-                            astPath = emptyList()
-                        ))
-                    }
-                }
-            } catch (_: ClassNotFoundException) {
-                // Java plugin not available — skip PsiPackage handling
             }
 
             val targetFile = effectiveTarget.containingFile?.virtualFile

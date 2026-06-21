@@ -158,7 +158,7 @@ object LanguageHandlerRegistry {
             if (handler.isAvailable()) return handler
         }
 
-        // Try case-insensitive match (for Python: "Python" vs "python")
+        // Try case-insensitive match
         val caseInsensitiveMatch = structureHandlers.entries.firstOrNull { (langId, _) ->
             langId.equals(language.id, ignoreCase = true)
         }?.value
@@ -217,7 +217,7 @@ object LanguageHandlerRegistry {
     /**
      * Gets a list of human-readable language names that have symbol reference handlers available.
      *
-     * @return A list of language names (e.g., "Java", "Python") that have available symbol reference handlers.
+     * @return A list of language names (e.g., "C#") that have available symbol reference handlers.
      */
     fun getSupportedLanguageNamesForSymbolReference(): List<String> {
         return symbolReferenceHandlers.filter { it.value.isAvailable() }.map { it.value.languageName }
@@ -226,7 +226,7 @@ object LanguageHandlerRegistry {
     /**
      * Gets a symbol reference handler for the given language name.
      *
-     * @param languageName The language name (e.g., "Java", "Kotlin")
+     * @param languageName The language name (e.g., "C#")
      * @return The handler if available, or null if no handler exists for the language
      */
     fun getSymbolReferenceHandlerByLanguageName(languageName: String): SymbolReferenceHandler? {
@@ -250,7 +250,7 @@ object LanguageHandlerRegistry {
             }
         }
 
-        // Try base language (e.g., TypeScript -> JavaScript)
+        // Try base language
         language.baseLanguage?.let { baseLanguage ->
             handlers[baseLanguage.id]?.let { handler ->
                 if (handler.isAvailable() && handler.canHandle(element)) {
@@ -274,15 +274,7 @@ object LanguageHandlerRegistry {
 
     private data class HandlerRegistration(val className: String, val displayName: String)
 
-    private val handlerRegistrations = listOf(
-        HandlerRegistration("com.github.dungphan.unityindex.handlers.java.JavaHandlers", "Java"),
-        HandlerRegistration("com.github.dungphan.unityindex.handlers.python.PythonHandlers", "Python"),
-        HandlerRegistration("com.github.dungphan.unityindex.handlers.javascript.JavaScriptHandlers", "JavaScript"),
-        HandlerRegistration("com.github.dungphan.unityindex.handlers.go.GoHandlers", "Go"),
-        HandlerRegistration("com.github.dungphan.unityindex.handlers.php.PhpHandlers", "PHP"),
-        HandlerRegistration("com.github.dungphan.unityindex.handlers.rust.RustHandlers", "Rust"),
-        HandlerRegistration("com.github.dungphan.unityindex.handlers.markdown.MarkdownHandlers", "Markdown"),
-    )
+    private val handlerRegistrations = emptyList<HandlerRegistration>()
 
     private fun registerLanguageHandlers(className: String, displayName: String) {
         try {

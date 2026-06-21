@@ -79,8 +79,8 @@ class FindClassTool : AbstractMcpTool() {
         .projectPath()
         .stringProperty(ParamNames.QUERY, "Search pattern. Supports substring and camelCase matching. Required for fresh search, ignored when cursor is provided.")
         .scopeProperty("Search scope. Default: project_files.")
-        .stringProperty(ParamNames.LANGUAGE, "Filter results by language (e.g., \"Kotlin\", \"Java\", \"Python\"). Case-insensitive. Optional.")
-        .booleanProperty(ParamNames.INCLUDE_GENERATED, "Include classes defined in generated sources (KSP/Dagger/annotation-processor output). Default: false.")
+        .stringProperty(ParamNames.LANGUAGE, "Filter results by language (e.g., \"C#\"). Case-insensitive. Optional.")
+        .booleanProperty(ParamNames.INCLUDE_GENERATED, "Include classes defined in generated sources. Default: false.")
         .enumProperty(ParamNames.MATCH_MODE, "How to match the query. Default: \"substring\".", listOf("substring", "prefix", "exact"))
         .intProperty(ParamNames.LIMIT, "Maximum results per page (deprecated, use pageSize). Default: $DEFAULT_PAGE_SIZE, max: $MAX_PAGE_SIZE.")
         .stringProperty("cursor", "Pagination cursor from a previous response. When provided, returns the next page of results. Search parameters are ignored; project_path and pageSize may still be provided.")
@@ -444,14 +444,6 @@ class FindClassTool : AbstractMcpTool() {
 
     private fun getLanguageName(element: PsiElement): String {
         return when (element.language.id) {
-            "JAVA" -> "Java"
-            "kotlin" -> "Kotlin"
-            "Python" -> "Python"
-            "JavaScript", "ECMAScript 6", "JSX Harmony" -> "JavaScript"
-            "TypeScript", "TypeScript JSX" -> "TypeScript"
-            "go" -> "Go"
-            "PHP" -> "PHP"
-            "Rust" -> "Rust"
             "C#" -> "C#"
             else -> element.language.displayName
         }

@@ -27,11 +27,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
- * Tool for retrieving type hierarchies across multiple languages.
+ * Tool for retrieving type hierarchies in C# / Unity projects.
  *
- * Supports: Java, Kotlin, Python, JavaScript, TypeScript, PHP, Rust
- *
- * Delegates to language-specific handlers via [LanguageHandlerRegistry].
+ * Delegates to Rider protocol or platform fallbacks via [LanguageHandlerRegistry].
  */
 class TypeHierarchyTool : AbstractMcpTool() {
 
@@ -40,25 +38,21 @@ class TypeHierarchyTool : AbstractMcpTool() {
     override val description = """
         Get the complete inheritance hierarchy for a class or interface. Use when you need to understand class relationships, find parent classes, or discover all subclasses.
 
-        Languages: Java, Kotlin, C#, Python, JavaScript, TypeScript, PHP, Rust.
-
-        Rust note: className parameter not supported for Rust; use file + line + column instead.
-
         Returns: target class info, full supertype chain (recursive), and all subtypes in the project.
 
-        Parameters: Either className (e.g., "com.example.MyClass") OR file + line + column. scope (optional, default: "project_files"; supported: project_files, project_and_libraries, project_production_files, project_test_files).
+        Parameters: Either className (e.g., "MyNamespace.MyClass") OR file + line + column. scope (optional, default: "project_files"; supported: project_files, project_and_libraries, project_production_files, project_test_files).
 
-        Example: {"className": "com.example.UserService", "scope": "project_and_libraries"} or {"file": "src/MyClass.java", "line": 10, "column": 14}
+        Example: {"className": "MyNamespace.PlayerController"} or {"file": "Assets/Scripts/PlayerController.cs", "line": 10, "column": 14}
     """.trimIndent()
 
     override val inputSchema: JsonObject = SchemaBuilder.tool()
         .projectPath()
-        .stringProperty("className", "Fully qualified class name (e.g., 'com.example.MyClass' for Java or 'App\\\\Models\\\\User' for PHP). RECOMMENDED - use this if you know the class name.")
-        .file(required = false, description = "Path to file relative to project root (e.g., 'src/main/java/com/example/MyClass.java'). Use with line and column.")
+        .stringProperty("className", "Fully qualified class name (e.g., 'MyNamespace.PlayerController'). RECOMMENDED - use this if you know the class name.")
+        .file(required = false, description = "Path to file relative to project root (e.g., 'Assets/Scripts/PlayerController.cs'). Use with line and column.")
         .intProperty("line", "1-based line number where the class is defined. Required if using file parameter.")
         .intProperty("column", "1-based column number. Required if using file parameter.")
         .scopeProperty("Search scope. Default: project_files.")
-        .booleanProperty(ParamNames.INCLUDE_GENERATED, "Include supertypes/subtypes defined in generated sources (KSP/Dagger/annotation-processor output). Default: true — keep generated types in the hierarchy.")
+        .booleanProperty(ParamNames.INCLUDE_GENERATED, "Include supertypes/subtypes defined in generated sources. Default: true — keep generated types in the hierarchy.")
         .build()
 
     override suspend fun doExecute(project: Project, arguments: JsonObject): ToolCallResult {
@@ -120,13 +114,11 @@ class TypeHierarchyTool : AbstractMcpTool() {
 
 
     private fun resolveTargetElement(project: Project, arguments: JsonObject): PsiElement? {
-        // Try className first (Java/Kotlin specific)
         val className = arguments["className"]?.jsonPrimitive?.content
         if (className != null) {
             return findClassByName(project, className)
         }
 
-        // Otherwise use file/line/column (works for all languages)
         val file = arguments["file"]?.jsonPrimitive?.content ?: return null
         val line = arguments["line"]?.jsonPrimitive?.int ?: return null
         val column = arguments["column"]?.jsonPrimitive?.int ?: return null

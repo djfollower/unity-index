@@ -30,7 +30,7 @@ object BuildListenerUtils {
     }
 
     /**
-     * Subscribes to Gradle/Maven build events via [com.intellij.build.BuildProgressListener].
+     * Subscribes to build events via [com.intellij.build.BuildProgressListener].
      *
      * Uses reflection to avoid compile-time dependency on the build API.
      * The [onEvent] callback receives both the buildId and the event object.
@@ -122,7 +122,7 @@ object BuildListenerUtils {
             LOG.debug("Subscribed to CompilationStatusListener for structured build messages")
             return true
         } catch (e: ClassNotFoundException) {
-            LOG.debug("CompilerTopics not available (no Java plugin), structured messages will be empty")
+            LOG.debug("CompilerTopics not available, structured messages will be empty")
             return false
         } catch (e: Exception) {
             LOG.warn("Failed to subscribe to CompilationStatusListener", e)

@@ -15,7 +15,7 @@ object TreeFormatter {
      *
      * @param nodes List of top-level structure nodes
      * @param fileName The file name to display as header
-     * @param language Language ID for language-specific formatting (e.g., "Java", "kotlin", "Python")
+     * @param language Language ID for language-specific formatting (e.g., "C#")
      * @return Formatted tree string
      */
     fun format(nodes: List<StructureNode>, fileName: String, language: String = ""): String {

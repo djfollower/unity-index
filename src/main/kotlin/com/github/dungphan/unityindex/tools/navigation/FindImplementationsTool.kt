@@ -31,11 +31,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
- * Tool for finding implementations of interfaces, abstract classes, or methods across multiple languages.
+ * Tool for finding implementations of interfaces, abstract classes, or methods in C# / Unity projects.
  *
- * Supports: Java, Kotlin, Python, JavaScript, TypeScript, PHP, Rust
- *
- * Delegates to language-specific handlers via [LanguageHandlerRegistry].
+ * Delegates to Rider protocol or platform fallbacks via [LanguageHandlerRegistry].
  */
 class FindImplementationsTool : AbstractMcpTool() {
 
@@ -49,22 +47,17 @@ class FindImplementationsTool : AbstractMcpTool() {
     override val description = """
         Find all implementations of an interface, abstract class, or abstract method. Use to discover concrete implementations when working with abstractions.
 
-        Languages: Java, Kotlin, C#, Python, JavaScript, TypeScript, PHP, Rust.
-
         Returns: list of implementing classes/methods with file paths, line/column numbers, and kind (class/method).
 
         Supports pagination: first call returns results + nextCursor. Pass cursor to get the next page.
 
         Target (mutually exclusive):
         - file + line + column: position-based lookup (necessary for fresh search, ignored when cursor is provided)
-        - language + symbol: fully qualified symbol reference (supported languages: ${supportedSymbolReferenceLanguagesDescription()}; necessary for fresh search, ignored when cursor is provided)
         - cursor: pagination cursor from a previous response
 
         Parameters: scope (optional, default: "project_files"; supported: project_files, project_and_libraries, project_production_files, project_test_files), pageSize (optional, default: 100, max: 500).
 
-        Example: {"file": "src/Repository.java", "line": 8, "column": 18}
-        Example: {"language": "Java", "symbol": "com.example.Repository", "scope": "project_and_libraries"}
-        Example: {"language": "PHP", "symbol": "\\App\\Contracts\\Repository"}
+        Example: {"file": "Assets/Scripts/IRepository.cs", "line": 8, "column": 18}
     """.trimIndent()
 
     override val inputSchema: JsonObject = SchemaBuilder.tool()
@@ -73,7 +66,7 @@ class FindImplementationsTool : AbstractMcpTool() {
         .lineAndColumn(required = false)
         .languageAndSymbol(required = false)
         .scopeProperty("Search scope. Default: project_files.")
-        .booleanProperty(ParamNames.INCLUDE_GENERATED, "Include implementations in generated sources (KSP/Dagger/annotation-processor output). Default: false.")
+        .booleanProperty(ParamNames.INCLUDE_GENERATED, "Include implementations in generated sources. Default: false.")
         .stringProperty("cursor", "Pagination cursor from a previous response. When provided, returns the next page of results. Search parameters are ignored; project_path and pageSize may still be provided.")
         .intProperty("pageSize", "Results per page. Default: $DEFAULT_PAGE_SIZE, max: $MAX_PAGE_SIZE.")
         .build()

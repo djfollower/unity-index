@@ -23,9 +23,7 @@ internal object BuiltInSearchScopeResolver {
      * Resolve [scope] to a [GlobalSearchScope].
      *
      * When [excludeGenerated] is true, the result additionally excludes IDE-recognized
-     * generated sources (KSP/Dagger/annotation-processor output). This keeps reference
-     * results — especially `ide_find_references` on heavily-injected symbols — focused on
-     * hand-written code instead of paginating through hundreds of generated DI factories.
+     * generated sources. This keeps reference results focused on hand-written code.
      *
      * The default is false (include generated): each tool decides its own default through
      * `includeGenerated`, so the shared resolver never silently drops generated sources.

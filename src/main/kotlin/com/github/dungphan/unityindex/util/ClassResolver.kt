@@ -13,44 +13,12 @@ object ClassResolver {
     private val LOG = logger<ClassResolver>()
 
     fun findClassByName(project: Project, qualifiedName: String): PsiElement? {
-        // Try JavaPsiFacade first (works for Java/Kotlin)
-        try {
-            val result = findClassByNameWithJavaPlugin(project, qualifiedName)
-            if (result != null) return result
-        } catch (_: Exception) {
-        }
-
-        // Fallback: use GotoClassModel2 via PopupFaithfulSymbolSearch (works for C# in Rider, etc.)
         try {
             val result = findClassByPopupSearch(project, qualifiedName)
             if (result != null) return result
         } catch (e: Exception) {
             LOG.debug("Popup-based class search failed for '$qualifiedName': ${e.message}", e)
         }
-
-        return null
-    }
-
-    private fun findClassByNameWithJavaPlugin(project: Project, qualifiedName: String): PsiElement? {
-        val javaPsiFacadeClass = Class.forName("com.intellij.psi.JavaPsiFacade")
-        val globalSearchScopeClass = Class.forName("com.intellij.psi.search.GlobalSearchScope")
-
-        val getInstanceMethod = javaPsiFacadeClass.getMethod("getInstance", Project::class.java)
-        val javaPsiFacade = getInstanceMethod.invoke(null, project)
-
-        val projectScopeMethod = globalSearchScopeClass.getMethod("projectScope", Project::class.java)
-        val allScopeMethod = globalSearchScopeClass.getMethod("allScope", Project::class.java)
-
-        val projectScope = projectScopeMethod.invoke(null, project)
-        val allScope = allScopeMethod.invoke(null, project)
-
-        val findClassMethod = javaPsiFacadeClass.getMethod("findClass", String::class.java, globalSearchScopeClass)
-
-        val classInProject = findClassMethod.invoke(javaPsiFacade, qualifiedName, projectScope) as PsiElement?
-        if (classInProject != null) return PsiUtils.getNavigationElement(classInProject)
-
-        val classInAll = findClassMethod.invoke(javaPsiFacade, qualifiedName, allScope) as PsiElement?
-        if (classInAll != null) return PsiUtils.getNavigationElement(classInAll)
 
         return null
     }

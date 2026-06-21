@@ -306,16 +306,7 @@ object PsiUtils {
     }
 
     /**
-     * Gets the navigation element for a PSI element, preferring source files over compiled files.
-     *
-     * This is crucial for library classes where we want to navigate to `.java` source files
-     * instead of `.class` bytecode files when sources are available.
-     *
-     * **Why this matters:**
-     * When you have a library with attached sources (e.g., via Maven or Gradle), IntelliJ
-     * stores both the compiled `.class` files and the source `.java` files. By default,
-     * PSI elements may point to the `.class` file, but `navigationElement` provides the
-     * source file if available, which is much more useful for reading code.
+     * Gets the navigation element for a PSI element, preferring source files over compiled/decompiled files.
      *
      * @param element The PSI element to get the navigation target for
      * @return The navigation element (preferably source), or the original element if no navigation target exists

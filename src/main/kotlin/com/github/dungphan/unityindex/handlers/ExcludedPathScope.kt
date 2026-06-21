@@ -7,11 +7,7 @@ import com.intellij.psi.search.GlobalSearchScope
 
 /**
  * A [GlobalSearchScope] that delegates to [baseScope] but rejects files in excluded
- * directories (venv, node_modules, build output, worktrees).
- *
- * Applying the filter at the scope level means IntelliJ's search infrastructure
- * never resolves PSI or allocates buffer slots for excluded files — unlike the
- * post-filter approach which requires over-fetching to compensate.
+ * directories (build output, Unity Library/Temp/Logs, worktrees).
  */
 class ExcludedPathScope(
     baseScope: GlobalSearchScope,
@@ -27,8 +23,8 @@ class ExcludedPathScope(
 
 /**
  * Wraps [GlobalSearchScope.projectScope] or [GlobalSearchScope.allScope] with
- * excluded-path filtering so that venv, node_modules, and worktree files are
- * never processed by IntelliJ's search APIs.
+ * excluded-path filtering so that build output, Unity cache dirs, and worktree files
+ * are never processed by the IDE's search APIs.
  */
 fun createFilteredScope(project: Project, includeLibraries: Boolean = false): GlobalSearchScope {
     val basePath = project.basePath ?: ""

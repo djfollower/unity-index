@@ -26,10 +26,10 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
- * Tool for searching code symbols by name.
+ * Tool for searching code symbols by name in C# / Unity projects.
  *
- * Works in any supported JetBrains IDE. Delegates to the headless Go to Symbol popup stack via
- * [OptimizedSymbolSearch], so matching and ranking follow IntelliJ's own Go to Symbol popup.
+ * Delegates to the headless Go to Symbol popup stack via [OptimizedSymbolSearch],
+ * so matching and ranking follow Rider's own Go to Symbol popup.
  */
 class FindSymbolTool : AbstractMcpTool() {
 
@@ -41,26 +41,24 @@ class FindSymbolTool : AbstractMcpTool() {
     override val name = ToolNames.FIND_SYMBOL
 
     override val description = """
-        Search for symbols by name across the codebase. Use when you know a symbol name but not its location—finds classes, methods, fields, and functions. Faster and more accurate than grep for code navigation.
+        Search for symbols by name across the codebase. Use when you know a symbol name but not its location—finds classes, methods, fields, and properties. Faster and more accurate than grep for code navigation.
 
-        Works in any supported JetBrains IDE. Result quality is best for Java, Kotlin, Python, JavaScript, TypeScript, Go, PHP, and Rust; other IDE-supplied languages (Ruby, C/C++, SQL, …) are also returned with their IDE-provided metadata.
-
-        Matching and ranking follow IntelliJ's Go to Symbol popup, including qualified queries like "BasicSolver.run".
+        Matching and ranking follow Rider's Go to Symbol popup, including qualified queries like "PlayerController.Update".
 
         Returns: matching symbols with qualified names, file paths, line/column numbers, and kind.
 
         Supports pagination: first call returns results + nextCursor. Pass cursor to get the next page.
-        Parameters: query (required for fresh search), scope (optional, default: "project_files"; supported: project_files, project_and_libraries, project_production_files, project_test_files), language (optional case-insensitive filter, e.g. "Kotlin"), pageSize (optional, default: 25, max: 500), cursor (for pagination, replaces search params; project_path may still be required).
+        Parameters: query (required for fresh search), scope (optional, default: "project_files"; supported: project_files, project_and_libraries, project_production_files, project_test_files), language (optional case-insensitive filter, e.g. "C#"), pageSize (optional, default: 25, max: 500), cursor (for pagination, replaces search params; project_path may still be required).
 
-        Example: {"query": "UserService"} or {"query": "find_user", "scope": "project_and_libraries"}
+        Example: {"query": "PlayerController"} or {"query": "OnCollisionEnter", "scope": "project_and_libraries"}
     """.trimIndent()
 
     override val inputSchema: JsonObject = SchemaBuilder.tool()
         .projectPath()
         .stringProperty(ParamNames.QUERY, "Search pattern. Matching follows IntelliJ's Go to Symbol popup, including qualified queries. Required for fresh search, ignored when cursor is provided.")
         .scopeProperty("Search scope. Default: project_files.")
-        .stringProperty(ParamNames.LANGUAGE, "Filter results by language (e.g., \"Kotlin\", \"Java\", \"Python\"). Case-insensitive. Optional.")
-        .booleanProperty(ParamNames.INCLUDE_GENERATED, "Include symbols defined in generated sources (KSP/Dagger/annotation-processor output). Default: false.")
+        .stringProperty(ParamNames.LANGUAGE, "Filter results by language (e.g., \"C#\"). Case-insensitive. Optional.")
+        .booleanProperty(ParamNames.INCLUDE_GENERATED, "Include symbols defined in generated sources. Default: false.")
         .intProperty(ParamNames.LIMIT, "Maximum results per page (deprecated, use pageSize). Default: $DEFAULT_PAGE_SIZE, max: $MAX_PAGE_SIZE.")
         .stringProperty("cursor", "Pagination cursor from a previous response. When provided, returns the next page of results. Search parameters are ignored; project_path and pageSize may still be provided.")
         .intProperty("pageSize", "Results per page. Default: $DEFAULT_PAGE_SIZE, max: $MAX_PAGE_SIZE.")

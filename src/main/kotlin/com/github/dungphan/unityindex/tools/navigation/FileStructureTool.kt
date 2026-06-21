@@ -13,12 +13,10 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Tool for analyzing the hierarchical structure of source files.
+ * Tool for analyzing the hierarchical structure of C# source files.
  *
  * Provides a tree-formatted view of file structure similar to IDE's Structure view,
- * showing classes, methods, fields, Markdown headings, and their nesting relationships.
- *
- * Supports: Java, Kotlin, Python, JavaScript, TypeScript, PHP, Markdown
+ * showing classes, methods, fields, properties, and their nesting relationships.
  */
 class FileStructureTool : AbstractMcpTool() {
 
@@ -27,20 +25,18 @@ class FileStructureTool : AbstractMcpTool() {
     override val description = """
         Get the hierarchical structure of a source file (similar to IDE's Structure view).
 
-        Shows classes, methods, fields, functions, PHP namespaces, constants, enum cases, Markdown headings, and their nesting relationships in a tree format.
-
-        Supports: Java, Kotlin, C#, Python, JavaScript, TypeScript, PHP, Markdown, and any language with IDE Structure View support.
+        Shows classes, methods, fields, properties, constants, enum members, and their nesting relationships in a tree format.
 
         Returns: Formatted tree string with element types, modifiers, signatures, and line numbers.
 
         Parameters: file (required) - Path relative to project root
 
-        Example: {"file": "src/main/java/com/example/MyClass.java"}
+        Example: {"file": "Assets/Scripts/PlayerController.cs"}
     """.trimIndent()
 
     override val inputSchema: JsonObject = SchemaBuilder.tool()
         .projectPath()
-        .file(description = "Path to file relative to project root (e.g., 'src/main/java/com/example/MyClass.java'). REQUIRED.")
+        .file(description = "Path to file relative to project root (e.g., 'Assets/Scripts/PlayerController.cs'). REQUIRED.")
         .build()
 
     override suspend fun doExecute(project: Project, arguments: JsonObject): ToolCallResult {

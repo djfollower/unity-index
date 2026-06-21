@@ -21,20 +21,19 @@ class ReadFileTool : AbstractMcpTool() {
     override val name = ToolNames.READ_FILE
 
     override val description = """
-    File lookup: by file path (relative, absolute, jar path with !/or jar://) or qualifiedName (e.g., java.util.ArrayList).
-    Best for library/dependency Java sources (jars/external libs). For project files, prefer native tools; enable only when needed.
+    File lookup: by file path (relative, absolute) or qualifiedName (e.g., UnityEngine.MonoBehaviour).
 
     Returns: file content (full or line range) with metadata (language, lineCount, start/end, isLibraryFile).
 
     Parameters: file or qualifiedName (one required), startLine (optional), endLine (optional).
 
-    Examples: {"file": "src/main/java/MyClass.java"} or {"qualifiedName": "java.util.ArrayList"} or {"file": "MyClass.java", "startLine": 10, "endLine": 20}
+    Examples: {"file": "Assets/Scripts/PlayerController.cs"} or {"qualifiedName": "UnityEngine.MonoBehaviour"} or {"file": "PlayerController.cs", "startLine": 10, "endLine": 20}
 """.trimIndent()
 
     override val inputSchema: JsonObject = SchemaBuilder.tool()
         .projectPath()
         .file(required = false, description = "File path (relative, absolute, jar path with jar!/, or jar:// URL).")
-        .stringProperty(ParamNames.QUALIFIED_NAME, "Fully qualified class name (e.g., java.util.ArrayList).")
+        .stringProperty(ParamNames.QUALIFIED_NAME, "Fully qualified class name (e.g., UnityEngine.MonoBehaviour).")
         .intProperty(ParamNames.START_LINE, "Starting line number (1-based, inclusive).")
         .intProperty(ParamNames.END_LINE, "Ending line number (1-based, inclusive).")
         .build()

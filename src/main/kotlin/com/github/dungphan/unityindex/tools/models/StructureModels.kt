@@ -47,7 +47,7 @@ enum class StructureKind {
  * Output model for file structure tool.
  *
  * @property file The file path relative to project root
- * @property language The language ID (e.g., "JAVA", "Python", "kotlin")
+ * @property language The language ID (e.g., "C#")
  * @property structure The formatted tree string
  */
 @Serializable

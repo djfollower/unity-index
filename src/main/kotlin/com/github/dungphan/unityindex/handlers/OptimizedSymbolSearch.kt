@@ -281,14 +281,6 @@ object OptimizedSymbolSearch {
 
     private fun getLanguageName(element: PsiElement): String {
         return when (element.language.id) {
-            "JAVA" -> "Java"
-            "kotlin" -> "Kotlin"
-            "Python" -> "Python"
-            "JavaScript", "ECMAScript 6", "JSX Harmony" -> "JavaScript"
-            "TypeScript", "TypeScript JSX" -> "TypeScript"
-            "go" -> "Go"
-            "PHP" -> "PHP"
-            "Rust" -> "Rust"
             "C#" -> "C#"
             else -> element.language.displayName
         }
@@ -336,13 +328,6 @@ object OptimizedSymbolSearch {
     private fun determineKind(element: PsiElement): String {
         val className = element.javaClass.simpleName.lowercase()
         return when {
-            // Rust types
-            className.contains("structitem") -> "STRUCT"
-            className.contains("traititem") -> "TRAIT"
-            className.contains("enumitem") -> "ENUM"
-            className.contains("implitem") -> "IMPL"
-            className.contains("moditem") -> "MODULE"
-            // Common types
             className.contains("class") -> "CLASS"
             className.contains("interface") -> "INTERFACE"
             className.contains("enum") -> "ENUM"

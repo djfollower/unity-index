@@ -21,11 +21,9 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Tool for finding super methods across multiple languages.
+ * Tool for finding super methods in C# / Unity projects.
  *
- * Supports: Java, Kotlin, Python, JavaScript, TypeScript, PHP, Rust
- *
- * Delegates to language-specific handlers via [LanguageHandlerRegistry].
+ * Delegates to Rider protocol or platform fallbacks via [LanguageHandlerRegistry].
  */
 class FindSuperMethodsTool : AbstractMcpTool() {
 
@@ -34,19 +32,11 @@ class FindSuperMethodsTool : AbstractMcpTool() {
     override val description = """
         Find parent methods that a method overrides or implements. Use to navigate up the inheritance chain—from implementation to interface, or from override to original declaration.
 
-        Languages: Java, Kotlin, C#, Python, JavaScript, TypeScript, PHP.
-
-        NOT supported for Rust: Rust uses trait implementations rather than classical inheritance, so there are no "super methods" in the traditional sense. Use ide_find_definition or ide_type_hierarchy instead.
-
         Returns: full hierarchy chain from immediate parent (depth=1) to root, with file locations (line/column) and containing class info.
 
-        Target (mutually exclusive):
-        - file + line + column: position-based lookup (position can be anywhere within the method body)
-        - language + symbol: fully qualified symbol reference (supported languages: ${supportedSymbolReferenceLanguagesDescription()})
+        Target: file + line + column (position can be anywhere within the method body).
 
-        Example: {"file": "src/UserServiceImpl.java", "line": 25, "column": 10}
-        Example: {"language": "Java", "symbol": "com.example.UserServiceImpl#getUser(String)"}
-        Example: {"language": "PHP", "symbol": "\\App\\Service\\UserService::find()"}
+        Example: {"file": "Assets/Scripts/PlayerController.cs", "line": 25, "column": 10}
     """.trimIndent()
 
     override val inputSchema: JsonObject = SchemaBuilder.tool()

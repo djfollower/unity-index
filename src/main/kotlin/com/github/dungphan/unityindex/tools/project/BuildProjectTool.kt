@@ -96,11 +96,11 @@ class BuildProjectTool : AbstractMcpTool() {
 
         val buildDeferred = CompletableDeferred<ProjectTaskManager.Result>()
 
-        // JPS compiler messages (Java/Kotlin via Java plugin - high fidelity)
+        // Compiler messages (high fidelity)
         val compilerMessages = Collections.synchronizedList(mutableListOf<BuildMessage>())
         val compilerRawOutput = StringBuffer()
 
-        // Build events (Gradle/Maven/universal via BuildViewManager - fallback)
+        // Build events (via BuildViewManager - fallback)
         val buildEventMessages = Collections.synchronizedList(mutableListOf<BuildMessage>())
         val buildEventRawOutput = StringBuffer()
 

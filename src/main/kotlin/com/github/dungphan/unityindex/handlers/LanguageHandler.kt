@@ -12,27 +12,12 @@ import com.intellij.psi.PsiNamedElement
  * Language handlers provide language-specific implementations for code intelligence
  * operations like type hierarchy, call hierarchy, finding implementations, etc.
  *
- * Each handler is associated with a specific language (e.g., "Java", "Python", "JavaScript")
- * and is only loaded when the corresponding language plugin is available in the IDE.
- *
- * ## Usage
- *
- * Handlers are registered with the [LanguageHandlerRegistry] and are discovered
- * at runtime based on available plugins. Tools delegate to handlers via the registry:
- *
- * ```kotlin
- * val handler = LanguageHandlerRegistry.getHandler<TypeHierarchyHandler>(element)
- * val result = handler?.getTypeHierarchy(element, project)
- * ```
- *
  * @param T The result type returned by this handler
  * @see LanguageHandlerRegistry
  */
 interface LanguageHandler<T> {
     /**
-     * The language ID this handler supports.
-     *
-     * Common values: "JAVA", "kotlin", "Python", "JavaScript", "TypeScript", "ECMAScript 6"
+     * The language ID this handler supports (e.g., "C#").
      *
      * This should match the [com.intellij.lang.Language.id] of the supported language.
      */
@@ -260,9 +245,7 @@ data class SuperMethodData(
  */
 interface SymbolReferenceHandler : LanguageHandler<PsiNamedElement> {
     /**
-     * The language name this handler supports.
-     *
-     * Currently implemented for languages such as "Java" and "PHP". Future handlers may use "Kotlin", "Python", "JavaScript", etc.
+     * The language name this handler supports (e.g., "C#").
      *
      * This is the user-facing language name used in the `language` tool parameter.
      * Should match the [com.intellij.lang.Language.displayName] (case-insensitive matching is used).

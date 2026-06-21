@@ -28,34 +28,24 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
- * Tool for analyzing method call relationships across multiple languages.
+ * Tool for analyzing method call relationships in C# / Unity projects.
  *
- * Supports: Java, Kotlin, Python, JavaScript, TypeScript, PHP, Rust
- *
- * Delegates to language-specific handlers via [LanguageHandlerRegistry].
+ * Delegates to Rider protocol or platform fallbacks via [LanguageHandlerRegistry].
  */
 class CallHierarchyTool : AbstractMcpTool() {
 
     override val name = "ide_call_hierarchy"
 
     override val description = """
-        Build a call hierarchy tree for a method/function. Use to trace execution flow—find what calls this method (callers) or what this method calls (callees).
-
-        Languages: Java, Kotlin, C#, Python, JavaScript, TypeScript, PHP, Rust.
-
-        Rust note: "callers" direction works well; "callees" direction may have limited results due to Rust plugin PSI resolution constraints.
+        Build a call hierarchy tree for a method. Use to trace execution flow—find what calls this method (callers) or what this method calls (callees).
 
         Returns: recursive tree with method signatures, file locations (line/column), and nested call relationships.
 
-        Target (mutually exclusive):
-        - file + line + column: position-based lookup
-        - language + symbol: fully qualified symbol reference (supported languages: ${supportedSymbolReferenceLanguagesDescription()})
+        Target: file + line + column (position-based lookup).
 
         Parameters: direction (required): "callers" or "callees". depth (optional, default: 3, max: 5). scope (optional, default: "project_files"; supported: project_files, project_and_libraries, project_production_files, project_test_files).
 
-        Example: {"file": "src/Service.java", "line": 42, "column": 10, "direction": "callers"}
-        Example: {"language": "Java", "symbol": "com.example.Service#processRequest(String)", "direction": "callers", "scope": "project_and_libraries"}
-        Example: {"language": "PHP", "symbol": "\\App\\Service\\UserService::find()", "direction": "callers"}
+        Example: {"file": "Assets/Scripts/PlayerController.cs", "line": 42, "column": 10, "direction": "callers"}
     """.trimIndent()
 
     override val inputSchema: JsonObject = SchemaBuilder.tool()
@@ -66,7 +56,7 @@ class CallHierarchyTool : AbstractMcpTool() {
         .enumProperty("direction", "Direction: 'callers' (methods that call this method) or 'callees' (methods this method calls)", listOf("callers", "callees"), required = true)
         .intProperty("depth", "How many levels deep to traverse the call hierarchy (default: 3, max: 5)")
         .scopeProperty("Search scope. Default: project_files.")
-        .booleanProperty(ParamNames.INCLUDE_GENERATED, "Include callers/callees in generated sources (KSP/Dagger/annotation-processor output). Default: true.")
+        .booleanProperty(ParamNames.INCLUDE_GENERATED, "Include callers/callees in generated sources. Default: true.")
         .build()
 
     companion object {

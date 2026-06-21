@@ -503,12 +503,10 @@ abstract class AbstractMcpTool : McpTool {
     }
 
     /**
-     * Resolves whether generated sources (KSP/Dagger/annotation-processor output) should be
-     * excluded from the search scope, derived from the optional `includeGenerated` argument.
+     * Resolves whether generated sources should be excluded from the search scope,
+     * derived from the optional `includeGenerated` argument.
      *
-     * Each tool passes its own [default] for `includeGenerated` so behavior is per-tool:
-     * reference and hierarchy tools include generated sources by default, while name and
-     * implementation searches exclude them by default.
+     * Each tool passes its own [default] for `includeGenerated` so behavior is per-tool.
      *
      * @return true when generated sources should be excluded from the resolved scope.
      */
@@ -650,13 +648,11 @@ abstract class AbstractMcpTool : McpTool {
     /**
      * Finds a class by its fully qualified name.
      *
-     * Delegates to [ClassResolver] which supports multiple languages:
-     * - **PHP**: Uses `PhpIndex.getClassesByFQN()` and `getInterfacesByFQN()`
-     * - **Java/Kotlin**: Uses `JavaPsiFacade.findClass()`
+     * Delegates to [ClassResolver] which uses the IDE's Go to Class search infrastructure.
      *
      * @param project The project context
-     * @param qualifiedName Fully qualified class name (e.g., "com.example.MyClass" or "\App\Models\User")
-     * @return The PsiClass/PhpClass, or null if not found or no suitable plugin is available
+     * @param qualifiedName Fully qualified class name (e.g., "MyNamespace.PlayerController")
+     * @return The PSI element, or null if not found
      */
     protected fun findClassByName(project: Project, qualifiedName: String): PsiElement? {
         return ClassResolver.findClassByName(project, qualifiedName)
