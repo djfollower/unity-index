@@ -2,8 +2,8 @@ package com.github.dungphan.unityindex.settings
 
 import com.github.dungphan.unityindex.McpBundle
 import com.github.dungphan.unityindex.McpConstants
-import com.github.dungphan.unityindex.server.transport.KtorMcpServer
 import com.github.dungphan.unityindex.server.McpServerService
+import com.github.dungphan.unityindex.server.transport.KtorMcpServer
 import com.intellij.icons.AllIcons
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
@@ -44,6 +44,8 @@ class McpSettingsConfigurable : Configurable {
     private var serverHostField: JBTextField? = null
     private var serverPortSpinner: JSpinner? = null
     private var syncExternalChangesCheckBox: JBCheckBox? = null
+    private var unixSocketCheckBox: JBCheckBox? = null
+    private var unixSocketPathField: JBTextField? = null
     private val toolCheckBoxes = mutableMapOf<String, JBCheckBox>()
     private var uiDisposable: Disposable? = null
 
@@ -109,6 +111,30 @@ class McpSettingsConfigurable : Configurable {
             add(warningRow)
         }
 
+        unixSocketCheckBox = JBCheckBox(McpBundle.message("settings.unixSocket")).apply {
+            toolTipText = McpBundle.message("settings.unixSocket.tooltip")
+        }
+        unixSocketPathField = JBTextField(McpConstants.DEFAULT_UNIX_SOCKET_PATH, 30).apply {
+            toolTipText = McpBundle.message("settings.unixSocketPath.tooltip")
+        }
+
+        unixSocketCheckBox!!.addActionListener {
+            unixSocketPathField!!.isEnabled = unixSocketCheckBox!!.isSelected
+        }
+
+        val unixSocketPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            val checkboxRow = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+                add(unixSocketCheckBox)
+            }
+            add(checkboxRow)
+            val pathRow = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(24), 0)).apply {
+                add(JBLabel(McpBundle.message("settings.unixSocketPath") + ":"))
+                add(unixSocketPathField)
+            }
+            add(pathRow)
+        }
+
         val availableToolsPanel = createToolsPanel()
 
         panel = FormBuilder.createFormBuilder()
@@ -116,6 +142,8 @@ class McpSettingsConfigurable : Configurable {
             .addComponentToRightColumn(hostWarningLabel!!)
             .addLabeledComponent(JBLabel(McpBundle.message("settings.serverPort") + ":"), serverPortSpinner!!, 1, false)
             .addComponent(syncPanel, 1)
+            .addSeparator(10)
+            .addComponent(unixSocketPanel, 1)
             .addSeparator(10)
             .addComponent(JBLabel(McpBundle.message("settings.tools.title")), 5)
             .addComponent(availableToolsPanel, 5)
@@ -158,7 +186,9 @@ class McpSettingsConfigurable : Configurable {
 
         if (serverHostField?.text?.trim() != settings.serverHost ||
             serverPortSpinner?.value != settings.serverPort ||
-            syncExternalChangesCheckBox?.isSelected != settings.syncExternalChanges) {
+            syncExternalChangesCheckBox?.isSelected != settings.syncExternalChanges ||
+            unixSocketCheckBox?.isSelected != settings.unixSocketEnabled ||
+            unixSocketPathField?.text?.trim() != settings.unixSocketPath) {
             return true
         }
 
@@ -207,9 +237,16 @@ class McpSettingsConfigurable : Configurable {
             )
         }
 
+        val oldUnixSocketEnabled = settings.unixSocketEnabled
+        val oldUnixSocketPath = settings.unixSocketPath
+        val newUnixSocketEnabled = unixSocketCheckBox?.isSelected ?: false
+        val newUnixSocketPath = unixSocketPathField?.text?.trim() ?: McpConstants.DEFAULT_UNIX_SOCKET_PATH
+
         settings.serverHost = newHost
         settings.serverPort = newPort
         settings.syncExternalChanges = syncExternalChangesCheckBox?.isSelected ?: false
+        settings.unixSocketEnabled = newUnixSocketEnabled
+        settings.unixSocketPath = newUnixSocketPath
 
         val disabledTools = mutableSetOf<String>()
         for ((toolName, checkbox) in toolCheckBoxes) {
@@ -258,6 +295,18 @@ class McpSettingsConfigurable : Configurable {
                 }
             }, ModalityState.any())
         }
+
+        if (newUnixSocketEnabled != oldUnixSocketEnabled || (newUnixSocketEnabled && newUnixSocketPath != oldUnixSocketPath)) {
+            ApplicationManager.getApplication().invokeLater({
+                val mcpService = McpServerService.getInstance()
+                if (!mcpService.isInitialized) return@invokeLater
+                if (newUnixSocketEnabled) {
+                    mcpService.startUnixSocketServer(newUnixSocketPath)
+                } else {
+                    mcpService.stopUnixSocketServer()
+                }
+            }, ModalityState.any())
+        }
     }
 
     private fun isServerAddressAvailable(host: String, port: Int): Boolean {
@@ -284,6 +333,9 @@ class McpSettingsConfigurable : Configurable {
         serverHostField?.text = settings.serverHost
         serverPortSpinner?.value = settings.serverPort
         syncExternalChangesCheckBox?.isSelected = settings.syncExternalChanges
+        unixSocketCheckBox?.isSelected = settings.unixSocketEnabled
+        unixSocketPathField?.text = settings.unixSocketPath
+        unixSocketPathField?.isEnabled = settings.unixSocketEnabled
 
         hostValidationErrorLabel?.isVisible = false
         hostValidationIcon?.isVisible = false
@@ -369,6 +421,8 @@ class McpSettingsConfigurable : Configurable {
         hostValidIcon = null
         serverPortSpinner = null
         syncExternalChangesCheckBox = null
+        unixSocketCheckBox = null
+        unixSocketPathField = null
         toolCheckBoxes.clear()
         uiDisposable?.let { Disposer.dispose(it) }
         uiDisposable = null

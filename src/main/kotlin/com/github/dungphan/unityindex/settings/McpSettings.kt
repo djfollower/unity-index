@@ -30,6 +30,8 @@ class McpSettings : PersistentStateComponent<McpSettings.State> {
         var disabledTools: MutableSet<String> = mutableSetOf(),
         var serverPort: Int = -1,
         var serverHost: String = McpConstants.DEFAULT_SERVER_HOST,
+        var unixSocketEnabled: Boolean = false,
+        var unixSocketPath: String = McpConstants.DEFAULT_UNIX_SOCKET_PATH,
     )
 
     private var state = State()
@@ -63,6 +65,14 @@ class McpSettings : PersistentStateComponent<McpSettings.State> {
     var serverHost: String
         get() = state.serverHost
         set(value) { state.serverHost = value }
+
+    var unixSocketEnabled: Boolean
+        get() = state.unixSocketEnabled
+        set(value) { state.unixSocketEnabled = value }
+
+    var unixSocketPath: String
+        get() = state.unixSocketPath
+        set(value) { state.unixSocketPath = value }
 
     fun isToolEnabled(toolName: String): Boolean = toolName !in state.disabledTools
 

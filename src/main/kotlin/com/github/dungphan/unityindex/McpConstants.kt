@@ -15,6 +15,8 @@ object McpConstants {
 
     const val DEFAULT_SERVER_PORT = 29170
 
+    val DEFAULT_UNIX_SOCKET_PATH: String = System.getProperty("java.io.tmpdir") + "/unity-index-mcp.sock"
+
     const val MCP_ENDPOINT_PATH = "/unity-index-mcp"
     const val SSE_ENDPOINT_PATH = "$MCP_ENDPOINT_PATH/sse"
     const val STREAMABLE_HTTP_ENDPOINT_PATH = "$MCP_ENDPOINT_PATH/streamable-http"

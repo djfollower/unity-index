@@ -4,6 +4,7 @@ import com.github.dungphan.unityindex.McpBundle
 import com.github.dungphan.unityindex.McpConstants
 import com.github.dungphan.unityindex.server.transport.KtorMcpServer
 import com.github.dungphan.unityindex.server.transport.KtorSseSessionManager
+import com.github.dungphan.unityindex.server.transport.UnixSocketMcpServer
 import com.github.dungphan.unityindex.settings.McpSettings
 import com.github.dungphan.unityindex.settings.McpSettingsConfigurable
 import com.github.dungphan.unityindex.tools.ToolRegistry
@@ -32,6 +33,7 @@ class McpServerService(
     private val jsonRpcHandler: JsonRpcHandler
     private val sseSessionManager: KtorSseSessionManager = KtorSseSessionManager()
     private var ktorServer: KtorMcpServer? = null
+    private var unixSocketServer: UnixSocketMcpServer? = null
     private var serverError: ServerError? = null
 
     @Volatile private var isShuttingDown = false
@@ -74,6 +76,10 @@ class McpServerService(
         val host = settings.serverHost
         isInitialized = true
         startServer(host, port)
+
+        if (settings.unixSocketEnabled) {
+            startUnixSocketServer(settings.unixSocketPath)
+        }
 
         LOG.info("MCP Server Service initialized with Ktor CIO server")
     }
@@ -126,7 +132,43 @@ class McpServerService(
     fun stopServer() {
         ktorServer?.stop()
         ktorServer = null
+        stopUnixSocketServer()
     }
+
+    fun startUnixSocketServer(socketPath: String): UnixSocketMcpServer.StartResult {
+        stopUnixSocketServer()
+
+        LOG.info("Starting Unix socket MCP server on $socketPath")
+
+        val server = UnixSocketMcpServer(
+            socketPath = java.nio.file.Path.of(socketPath),
+            jsonRpcHandler = jsonRpcHandler,
+            coroutineScope = coroutineScope
+        )
+
+        return when (val result = server.start()) {
+            is UnixSocketMcpServer.StartResult.Success -> {
+                unixSocketServer = server
+                LOG.info("Unix socket MCP server started on $socketPath")
+                result
+            }
+            is UnixSocketMcpServer.StartResult.Error -> {
+                LOG.warn("Failed to start Unix socket MCP server: ${result.message}", result.cause)
+                showErrorNotification(
+                    "Unix Socket Error",
+                    "Failed to start Unix socket server: ${result.message}"
+                )
+                result
+            }
+        }
+    }
+
+    fun stopUnixSocketServer() {
+        unixSocketServer?.stop()
+        unixSocketServer = null
+    }
+
+    fun isUnixSocketServerRunning(): Boolean = unixSocketServer?.isRunning() == true
 
     fun restartServer(newHost: String, newPort: Int): KtorMcpServer.StartResult {
         LOG.info("Restarting MCP Server on $newHost:$newPort")
@@ -166,6 +208,7 @@ class McpServerService(
         val port = settings.serverPort
         val host = settings.serverHost
         val isRunning = isServerRunning()
+        val unixSocketRunning = isUnixSocketServerRunning()
         return ServerStatusInfo(
             name = McpConstants.SERVER_NAME,
             version = McpConstants.SERVER_VERSION,
@@ -174,6 +217,7 @@ class McpServerService(
             legacySseUrl = if (isRunning) "http://$host:$port${McpConstants.SSE_ENDPOINT_PATH}" else "Server not running",
             postUrl = "http://$host:$port${McpConstants.MCP_ENDPOINT_PATH}",
             port = port,
+            unixSocketPath = if (unixSocketRunning) settings.unixSocketPath else null,
             registeredTools = toolRegistry.getAllTools().size,
             error = serverError?.message,
             isRunning = isRunning
@@ -238,6 +282,7 @@ class McpServerService(
         LOG.info("Disposing MCP Server Service")
         isShuttingDown = true
         watchdogAlarm.cancelAllRequests()
+        stopUnixSocketServer()
         stopServer()
         sseSessionManager.closeAllSessions()
     }
@@ -251,6 +296,7 @@ data class ServerStatusInfo(
     val legacySseUrl: String,
     val postUrl: String,
     val port: Int,
+    val unixSocketPath: String? = null,
     val registeredTools: Int,
     val error: String? = null,
     val isRunning: Boolean = true

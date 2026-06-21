@@ -391,17 +391,43 @@ class FindClassTool : AbstractMcpTool() {
     }
 
 
-    private fun getLineNumber(project: Project, element: PsiElement): Int? {
+    private fun getDocument(project: Project, element: PsiElement): com.intellij.openapi.editor.Document? {
         val psiFile = element.containingFile ?: return null
-        val document = PsiDocumentManager.getInstance(project).getDocument(psiFile) ?: return null
-        return document.getLineNumber(element.textOffset) + 1
+        return PsiDocumentManager.getInstance(project).getDocument(psiFile)
+            ?: psiFile.virtualFile?.let {
+                com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(it)
+            }
+    }
+
+    private fun resolveOffset(element: PsiElement, document: com.intellij.openapi.editor.Document): Int {
+        val offset = element.textOffset
+        if (offset > 0) return offset
+
+        val rawName = (element as? PsiNamedElement)?.name
+            ?: try { element.javaClass.getMethod("getName").invoke(element) as? String } catch (_: Exception) { null }
+        if (rawName != null && rawName.length > 1) {
+            val identifier = rawName.substringBefore('(').substringBefore(':').trim()
+            if (identifier.isNotEmpty()) {
+                val text = document.text
+                val identifierPattern = Regex("\\b${Regex.escape(identifier)}\\b")
+                val match = identifierPattern.find(text)
+                if (match != null) return match.range.first
+            }
+        }
+        return offset
+    }
+
+    private fun getLineNumber(project: Project, element: PsiElement): Int? {
+        val document = getDocument(project, element) ?: return null
+        val offset = resolveOffset(element, document)
+        return document.getLineNumber(offset) + 1
     }
 
     private fun getColumnNumber(project: Project, element: PsiElement): Int? {
-        val psiFile = element.containingFile ?: return null
-        val document = PsiDocumentManager.getInstance(project).getDocument(psiFile) ?: return null
-        val lineNumber = document.getLineNumber(element.textOffset)
-        return element.textOffset - document.getLineStartOffset(lineNumber) + 1
+        val document = getDocument(project, element) ?: return null
+        val offset = resolveOffset(element, document)
+        val lineNumber = document.getLineNumber(offset)
+        return offset - document.getLineStartOffset(lineNumber) + 1
     }
 
     private fun determineKind(element: PsiElement): String {
@@ -426,6 +452,7 @@ class FindClassTool : AbstractMcpTool() {
             "go" -> "Go"
             "PHP" -> "PHP"
             "Rust" -> "Rust"
+            "C#" -> "C#"
             else -> element.language.displayName
         }
     }
