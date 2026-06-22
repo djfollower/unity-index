@@ -121,8 +121,12 @@ class JsonRpcHandler(
 
         val projectPath = arguments[ParamNames.PROJECT_PATH]?.jsonPrimitive?.contentOrNull
 
+        LOG.info("Tool dispatch: $toolName (projectPath=$projectPath)")
+        val resolveStart = System.currentTimeMillis()
+
         val projectResult = projectResolver.resolveOrOpen(projectPath)
         if (projectResult.isError) {
+            LOG.warn("Tool dispatch: $toolName — project resolution failed in ${System.currentTimeMillis() - resolveStart}ms")
             return JsonRpcResponse(
                 id = request.id,
                 result = json.encodeToJsonElement(projectResult.errorResult!!)
@@ -130,6 +134,7 @@ class JsonRpcHandler(
         }
 
         val project = projectResult.project!!
+        LOG.debug("Tool dispatch: $toolName — project resolved to '${project.name}' in ${System.currentTimeMillis() - resolveStart}ms")
 
         return try {
             val result = tool.execute(project, arguments)
@@ -139,7 +144,7 @@ class JsonRpcHandler(
                 result = json.encodeToJsonElement(result)
             )
         } catch (e: IndexNotReadyException) {
-            LOG.debug("Tool $toolName called while IDE is indexing: ${e.message}")
+            LOG.warn("Tool $toolName called while IDE is indexing: ${e.message}")
             JsonRpcResponse(
                 id = request.id,
                 error = JsonRpcError(code = -32603, message = e.message ?: ErrorMessages.INDEX_NOT_READY)

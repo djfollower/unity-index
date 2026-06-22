@@ -19,6 +19,7 @@ import io.ktor.server.routing.*
 import io.ktor.server.routing.delete
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -65,7 +66,11 @@ class KtorMcpServer(
 
     companion object {
         private val LOG = logger<KtorMcpServer>()
+        private const val REQUEST_TIMEOUT_MS = 120_000L
+        private const val REQUEST_TIMEOUT_WARNING_MS = 60_000L
     }
+
+    private val activeRequests = AtomicInteger(0)
 
     private enum class StreamableBatchKind {
         REQUESTS_OR_NOTIFICATIONS,
@@ -341,26 +346,48 @@ class KtorMcpServer(
         }
 
         // Regular request: process and return JSON response
+        val currentActive = activeRequests.incrementAndGet()
+        val requestStart = System.currentTimeMillis()
+        LOG.info("Request start: method=${method}, activeRequests=$currentActive")
         try {
-            val response = runWithIdeModality {
-                jsonRpcHandler.handleRequest(
-                    body,
-                    protocolVersion = McpConstants.STREAMABLE_HTTP_MCP_PROTOCOL_VERSION
-                )
+            val response = withTimeout(REQUEST_TIMEOUT_MS) {
+                runWithIdeModality {
+                    jsonRpcHandler.handleRequest(
+                        body,
+                        protocolVersion = McpConstants.STREAMABLE_HTTP_MCP_PROTOCOL_VERSION
+                    )
+                }
+            }
+            val elapsed = System.currentTimeMillis() - requestStart
+            if (elapsed > REQUEST_TIMEOUT_WARNING_MS) {
+                LOG.warn("Request slow: method=$method took ${elapsed}ms (>${REQUEST_TIMEOUT_WARNING_MS}ms)")
+            } else {
+                LOG.info("Request done: method=$method in ${elapsed}ms")
             }
             if (response != null) {
                 call.respondText(response, ContentType.Application.Json)
             } else {
                 call.respond(HttpStatusCode.Accepted)
             }
+        } catch (e: TimeoutCancellationException) {
+            val elapsed = System.currentTimeMillis() - requestStart
+            LOG.error("Request TIMEOUT: method=$method after ${elapsed}ms, activeRequests=${activeRequests.get()}. " +
+                "The tool execution exceeded ${REQUEST_TIMEOUT_MS}ms — this is likely caused by EDT contention or a blocked read/write action.")
+            call.respondText(
+                createJsonRpcError(requestId, -32603, "Request timed out after ${elapsed}ms — IDE may be busy (indexing, modal dialog, or thread contention)"),
+                ContentType.Application.Json
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            LOG.error("Error processing MCP request (Streamable HTTP)", e)
+            val elapsed = System.currentTimeMillis() - requestStart
+            LOG.error("Request ERROR: method=$method after ${elapsed}ms", e)
             call.respondText(
                 createJsonRpcError(requestId, -32603, e.message ?: "Internal error"),
                 ContentType.Application.Json
             )
+        } finally {
+            activeRequests.decrementAndGet()
         }
     }
 
@@ -398,23 +425,36 @@ class KtorMcpServer(
             return
         }
 
+        val batchStart = System.currentTimeMillis()
+        LOG.info("Batch request start: ${batch.size} messages")
         val responses = mutableListOf<JsonElement>()
-        for (message in batch) {
+        for ((index, message) in batch.withIndex()) {
             val parsed = message as JsonObject
             val hasId = hasJsonRpcRequestId(parsed)
+            val msgMethod = parsed["method"]?.jsonPrimitive?.contentOrNull
 
             val response = try {
-                runWithIdeModality {
-                    jsonRpcHandler.handleRequest(
-                        message.toString(),
-                        protocolVersion = McpConstants.STREAMABLE_HTTP_MCP_PROTOCOL_VERSION
-                    )
+                val msgStart = System.currentTimeMillis()
+                val result = withTimeout(REQUEST_TIMEOUT_MS) {
+                    runWithIdeModality {
+                        jsonRpcHandler.handleRequest(
+                            message.toString(),
+                            protocolVersion = McpConstants.STREAMABLE_HTTP_MCP_PROTOCOL_VERSION
+                        )
+                    }
                 }
+                val msgElapsed = System.currentTimeMillis() - msgStart
+                LOG.info("Batch message [$index] method=$msgMethod done in ${msgElapsed}ms")
+                result
+            } catch (e: TimeoutCancellationException) {
+                val msgElapsed = System.currentTimeMillis() - batchStart
+                LOG.error("Batch message [$index] method=$msgMethod TIMEOUT after ${msgElapsed}ms")
+                createJsonRpcError(parsed["id"], -32603, "Request timed out")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                LOG.error("Error processing MCP batch message (Streamable HTTP)", e)
-                createJsonRpcError(parsed?.get("id"), -32603, e.message ?: "Internal error")
+                LOG.error("Error processing MCP batch message [$index] method=$msgMethod", e)
+                createJsonRpcError(parsed["id"], -32603, e.message ?: "Internal error")
             }
 
             if (hasId && response != null) {
@@ -487,23 +527,40 @@ class KtorMcpServer(
             return
         }
 
+        val currentActive = activeRequests.incrementAndGet()
+        val requestStart = System.currentTimeMillis()
+        LOG.info("Stateless request start: activeRequests=$currentActive")
         try {
-            val response = runWithIdeModality {
-                jsonRpcHandler.handleRequest(body, protocolVersion = protocolVersion)
+            val response = withTimeout(REQUEST_TIMEOUT_MS) {
+                runWithIdeModality {
+                    jsonRpcHandler.handleRequest(body, protocolVersion = protocolVersion)
+                }
             }
+            val elapsed = System.currentTimeMillis() - requestStart
+            LOG.info("Stateless request done in ${elapsed}ms")
             if (response != null) {
                 call.respondText(response, ContentType.Application.Json)
             } else {
                 call.respond(HttpStatusCode.Accepted)
             }
+        } catch (e: TimeoutCancellationException) {
+            val elapsed = System.currentTimeMillis() - requestStart
+            LOG.error("Stateless request TIMEOUT after ${elapsed}ms, activeRequests=${activeRequests.get()}")
+            call.respondText(
+                createJsonRpcError(null as JsonElement?, -32603, "Request timed out after ${elapsed}ms"),
+                ContentType.Application.Json
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            LOG.error("Error processing MCP request (Streamable HTTP)", e)
+            val elapsed = System.currentTimeMillis() - requestStart
+            LOG.error("Stateless request ERROR after ${elapsed}ms", e)
             call.respondText(
                 createJsonRpcError(null as JsonElement?, -32603, e.message ?: "Internal error"),
                 ContentType.Application.Json
             )
+        } finally {
+            activeRequests.decrementAndGet()
         }
     }
 
@@ -534,28 +591,46 @@ class KtorMcpServer(
 
         // Process request asynchronously and send response via SSE
         coroutineScope.launch {
+            val currentActive = activeRequests.incrementAndGet()
+            val requestStart = System.currentTimeMillis()
+            LOG.info("SSE request start: session=$sessionId, activeRequests=$currentActive")
             try {
-                val response = runWithIdeModality {
-                    jsonRpcHandler.handleRequest(
-                        body,
-                        protocolVersion = McpConstants.LEGACY_MCP_PROTOCOL_VERSION
-                    )
+                val response = withTimeout(REQUEST_TIMEOUT_MS) {
+                    runWithIdeModality {
+                        jsonRpcHandler.handleRequest(
+                            body,
+                            protocolVersion = McpConstants.LEGACY_MCP_PROTOCOL_VERSION
+                        )
+                    }
                 }
+                val elapsed = System.currentTimeMillis() - requestStart
+                LOG.info("SSE request done: session=$sessionId in ${elapsed}ms")
                 if (response != null) {
                     val sent = sseSessionManager.sendEvent(sessionId, "message", response)
                     if (!sent) {
                         LOG.warn("Failed to send response to session $sessionId - session may have closed")
                     }
                 }
+            } catch (e: TimeoutCancellationException) {
+                val elapsed = System.currentTimeMillis() - requestStart
+                LOG.error("SSE request TIMEOUT: session=$sessionId after ${elapsed}ms, activeRequests=${activeRequests.get()}")
+                sseSessionManager.sendEvent(
+                    sessionId,
+                    "message",
+                    createJsonRpcError(null as JsonElement?, -32603, "Request timed out after ${elapsed}ms")
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                LOG.error("Error processing MCP request (SSE)", e)
+                val elapsed = System.currentTimeMillis() - requestStart
+                LOG.error("SSE request ERROR: session=$sessionId after ${elapsed}ms", e)
                 sseSessionManager.sendEvent(
                     sessionId,
                     "message",
                     createJsonRpcError(null as JsonElement?, -32603, e.message ?: "Internal error")
                 )
+            } finally {
+                activeRequests.decrementAndGet()
             }
         }
     }

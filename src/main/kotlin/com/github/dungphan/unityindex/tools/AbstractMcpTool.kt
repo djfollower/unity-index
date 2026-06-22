@@ -22,6 +22,7 @@ import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.application.asContextElement
 import com.intellij.openapi.application.readAction as platformReadAction
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.DumbService
@@ -39,6 +40,7 @@ import com.intellij.psi.util.PsiModificationTracker
 import com.intellij.util.concurrency.annotations.RequiresReadLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -102,6 +104,12 @@ import kotlinx.serialization.json.put
  * @see doExecute
  */
 abstract class AbstractMcpTool : McpTool {
+
+    companion object {
+        private val LOG = logger<AbstractMcpTool>()
+        private const val PSI_SYNC_TIMEOUT_MS = 10_000L
+        private const val COMMIT_DOCUMENTS_TIMEOUT_MS = 5_000L
+    }
 
     /**
      * JSON serializer configured for tool results.
@@ -186,24 +194,49 @@ abstract class AbstractMcpTool : McpTool {
      * Uses non-blocking coroutine approach to avoid EDT freezes.
      */
     private suspend fun ensurePsiUpToDate(project: Project) {
-        // 1. Force VFS to see external changes before PSI work proceeds.
-        // Refresh all content roots (includes workspace sub-project directories)
-        val dirsToRefresh = mutableListOf<VirtualFile>()
-        val projectDir = project.basePath?.let { LocalFileSystem.getInstance().findFileByPath(it) }
-        if (projectDir != null) {
-            dirsToRefresh.add(projectDir)
-        }
-        for (rootPath in ProjectUtils.getModuleContentRoots(project)) {
-            if (rootPath != project.basePath) {
-                LocalFileSystem.getInstance().findFileByPath(rootPath)?.let { dirsToRefresh.add(it) }
-            }
-        }
-        if (dirsToRefresh.isNotEmpty()) {
-            VfsUtil.markDirtyAndRefresh(false, true, true, *dirsToRefresh.toTypedArray())
-        }
+        val syncStart = System.currentTimeMillis()
+        try {
+            withTimeout(PSI_SYNC_TIMEOUT_MS) {
+                // 1. Force VFS to see external changes before PSI work proceeds.
+                val dirsToRefresh = mutableListOf<VirtualFile>()
+                val projectDir = project.basePath?.let { LocalFileSystem.getInstance().findFileByPath(it) }
+                if (projectDir != null) {
+                    dirsToRefresh.add(projectDir)
+                }
+                for (rootPath in ProjectUtils.getModuleContentRoots(project)) {
+                    if (rootPath != project.basePath) {
+                        LocalFileSystem.getInstance().findFileByPath(rootPath)?.let { dirsToRefresh.add(it) }
+                    }
+                }
+                if (dirsToRefresh.isNotEmpty()) {
+                    val vfsStart = System.currentTimeMillis()
+                    LOG.info("PSI sync: VFS refresh starting for ${dirsToRefresh.size} root(s)")
+                    VfsUtil.markDirtyAndRefresh(false, true, true, *dirsToRefresh.toTypedArray())
+                    val vfsElapsed = System.currentTimeMillis() - vfsStart
+                    LOG.info("PSI sync: VFS refresh completed in ${vfsElapsed}ms")
+                    if (vfsElapsed > 3_000) {
+                        LOG.warn("PSI sync: VFS refresh took ${vfsElapsed}ms (>3s) — this may cause client timeouts")
+                    }
+                }
 
-        // 2. Commit Documents in a write-safe context
-        commitDocuments(project)
+                // 2. Commit Documents in a write-safe context
+                val commitStart = System.currentTimeMillis()
+                LOG.debug("PSI sync: commitDocuments starting")
+                try {
+                    withTimeout(COMMIT_DOCUMENTS_TIMEOUT_MS) {
+                        commitDocuments(project)
+                    }
+                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                    val commitElapsed = System.currentTimeMillis() - commitStart
+                    LOG.warn("PSI sync: commitDocuments timed out after ${commitElapsed}ms — EDT may be blocked. Proceeding without commit.")
+                }
+                val totalElapsed = System.currentTimeMillis() - syncStart
+                LOG.info("PSI sync: completed in ${totalElapsed}ms")
+            }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            val totalElapsed = System.currentTimeMillis() - syncStart
+            LOG.warn("PSI sync: timed out after ${totalElapsed}ms (limit=${PSI_SYNC_TIMEOUT_MS}ms). Proceeding with possibly stale PSI.")
+        }
     }
 
     /**
@@ -222,16 +255,28 @@ abstract class AbstractMcpTool : McpTool {
      * @return A [ToolCallResult] containing the operation result or error
      */
     final override suspend fun execute(project: Project, arguments: JsonObject): ToolCallResult {
+        val executeStart = System.currentTimeMillis()
+        val toolName = name
+        LOG.info("Tool execute: $toolName starting (dumbMode=${DumbService.isDumb(project)})")
+
         val settings = McpSettings.getInstance()
         if (requiresPsiSync && settings.syncExternalChanges) {
             ensurePsiUpToDate(project)
         }
+
+        val doExecuteStart = System.currentTimeMillis()
         return try {
-            doExecute(project, arguments)
+            val result = doExecute(project, arguments)
+            val totalElapsed = System.currentTimeMillis() - executeStart
+            val doExecuteElapsed = System.currentTimeMillis() - doExecuteStart
+            LOG.info("Tool execute: $toolName completed in ${totalElapsed}ms (doExecute=${doExecuteElapsed}ms, isError=${result.isError})")
+            if (totalElapsed > 30_000) {
+                LOG.warn("Tool execute: $toolName took ${totalElapsed}ms (>30s) — client may have timed out")
+            }
+            result
         } catch (e: com.intellij.openapi.project.IndexNotReadyException) {
-            // The IDE entered dumb mode (reindexing) during this call. This can happen
-            // when a project has just woken from dormant or a background process triggered
-            // reindexing. The caller should check ide_index_status and retry.
+            val totalElapsed = System.currentTimeMillis() - executeStart
+            LOG.warn("Tool execute: $toolName hit IndexNotReadyException after ${totalElapsed}ms")
             createErrorResult(
                 "IDE index is not ready — indexing is in progress. " +
                 "Call ide_index_status to check when it completes, then retry."
