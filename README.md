@@ -1,8 +1,13 @@
 # Unity Index MCP Server
 
-A JetBrains Rider plugin that exposes IDE code intelligence for Unity C# projects to AI agents via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io).
+A JetBrains Rider plugin (and matching VS Code extension) that exposes IDE code intelligence for Unity C# projects to AI agents via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io).
 
 Use semantic code navigation (find references, go to definition, type hierarchy, diagnostics) instead of raw text grep — dramatically reducing token usage and improving AI agent accuracy.
+
+> **Two editors, one wire protocol.** Both variants expose the same MCP tools over the same JSON-RPC schema, so a single MCP client config can target either:
+>
+> - **JetBrains Rider** — see installation below; default port `29170`.
+> - **Visual Studio Code** — `vscode-extension/` directory in this repo, backed by C# Dev Kit / Roslyn LSP; default port `29270`. See [`vscode-extension/README.md`](vscode-extension/README.md).
 
 ## Features
 
@@ -51,8 +56,16 @@ Use semantic code navigation (find references, go to definition, type hierarchy,
 
 ## Requirements
 
+For the Rider plugin:
+
 - **JetBrains Rider** 2025.1.3 or later
 - **JDK 21** (for building from source)
+
+For the VS Code extension (in `vscode-extension/`):
+
+- **VS Code** 1.85 or later
+- **C# Dev Kit** (or the standalone C# extension)
+- **Node 18+** (only needed to build from source)
 
 ## Installation
 

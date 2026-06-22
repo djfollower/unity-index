@@ -1,0 +1,94 @@
+{
+  "name": "unity-index-vscode",
+  "displayName": "Unity Index MCP",
+  "description": "MCP server exposing C# Dev Kit / Roslyn code intelligence for Unity projects to AI agents.",
+  "version": "0.3.1",
+  "publisher": "dungphan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/djfollower/unity-index.git",
+    "directory": "vscode-extension"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:ProjectSettings/ProjectVersion.txt",
+    "onCommand:unityIndex.startServer",
+    "onCommand:unityIndex.stopServer",
+    "onCommand:unityIndex.restartServer"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "unityIndex.startServer",
+        "title": "Unity Index: Start MCP Server"
+      },
+      {
+        "command": "unityIndex.stopServer",
+        "title": "Unity Index: Stop MCP Server"
+      },
+      {
+        "command": "unityIndex.restartServer",
+        "title": "Unity Index: Restart MCP Server"
+      },
+      {
+        "command": "unityIndex.showLogs",
+        "title": "Unity Index: Show Logs"
+      }
+    ],
+    "configuration": {
+      "title": "Unity Index MCP",
+      "properties": {
+        "unityIndex.mcp.port": {
+          "type": "number",
+          "default": 29270,
+          "description": "HTTP port for the MCP server. Default differs from Rider plugin (29170) so both can run at once."
+        },
+        "unityIndex.mcp.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host the MCP server binds to."
+        },
+        "unityIndex.mcp.unixSocketEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also listen on a Unix domain socket / named pipe for the stdio bridge."
+        },
+        "unityIndex.mcp.unixSocketPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Unix domain socket / named pipe. Empty = OS default (/tmp/unity-index-mcp-vscode.sock or \\\\.\\pipe\\unity-index-mcp-vscode)."
+        },
+        "unityIndex.mcp.readinessTimeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "description": "Max time to wait for C# Dev Kit / Roslyn LSP to finish project load before tool calls return without it."
+        },
+        "unityIndex.mcp.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the MCP server automatically when a Unity workspace is opened."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "vscode:prepublish": "tsc -p .",
+    "package": "node scripts/package.js",
+    "package:install": "node scripts/package.js --install"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.2",
+    "typescript": "^5.3.0"
+  }
+}

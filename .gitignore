@@ -11,3 +11,9 @@ local.properties
 docs/superpowers
 .idea/
 scripts/build-install.sh
+
+# vscode-extension
+vscode-extension/node_modules/
+vscode-extension/dist/
+vscode-extension/*.vsix
+vscode-extension/.vscode-test/

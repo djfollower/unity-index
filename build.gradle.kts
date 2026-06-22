@@ -76,4 +76,10 @@ tasks {
     wrapper {
         gradleVersion = providers.gradleProperty("gradleVersion").get()
     }
+
+    // Output: build/distributions/unity-index-rider-<version>.zip
+    // (kept in lockstep with the VS Code extension's unity-index-vscode-<version>.vsix)
+    buildPlugin {
+        archiveBaseName.set("unity-index-rider")
+    }
 }
