@@ -42,6 +42,17 @@ Use semantic code navigation (find references, go to definition, type hierarchy,
 | `ide_sync_files` | Sync external file changes with the IDE |
 | `ide_build_project` | Build the project and return results |
 
+### Batch Dispatcher
+
+| Tool | Description |
+|------|-------------|
+| `ide_batch` | Run up to 256 tool calls in one MCP request with shared PSI sync and bounded concurrency |
+
+For large sweeps over a Unity project (e.g. resolving 100+ symbols), `ide_batch` is far
+faster than issuing per-call requests: PSI synchronization and project resolution run
+once for the whole batch, and entries execute concurrently (default 8, max 16). See
+[MCP wire format](#mcp-wire-format) below for the request and response shape.
+
 ### Unity-Specific Tools
 
 | Tool | Description |
@@ -166,6 +177,89 @@ Replace `/path/to/unity-index` with the actual path where you cloned this reposi
 
 > The Unix socket bypasses TCP entirely, so corporate firewalls and localhost restrictions don't apply. The socket path is configurable in settings (default: `/tmp/unity-index-mcp.sock`).
 
+## MCP wire format
+
+Both variants speak JSON-RPC 2.0. Every tool call follows the standard MCP `tools/call` shape:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "ide_find_symbol",
+    "arguments": { "name": "PlayerController", "project_path": "/path/to/project" }
+  }
+}
+```
+
+### Transport-level batching (JSON-RPC arrays)
+
+Clients may POST a JSON array of requests; the server returns an array of responses.
+Entries run **sequentially**; notifications (no `id`) are stripped from the reply. This
+is JSON-RPC 2.0 batching as-spec — useful for grouping a handful of unrelated calls,
+not for performance sweeps.
+
+### Tool-level batching: `ide_batch`
+
+For large sweeps where the per-call PSI / VFS sync, project resolution, and HTTP framing
+would dominate wall clock, use the `ide_batch` tool. It dispatches up to 256 inner calls
+inside one MCP request, runs them concurrently (default 8, max 16), and amortizes shared
+setup across the batch.
+
+**Request:**
+
+```json
+{
+  "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": {
+    "name": "ide_batch",
+    "arguments": {
+      "project_path": "/path/to/project",
+      "calls": [
+        { "id": "q1", "tool": "ide_find_symbol", "arguments": { "name": "PlayerController" } },
+        { "id": "q2", "tool": "ide_find_class",  "arguments": { "name": "Enemy" } },
+        { "id": "q3", "tool": "ide_read_file",   "arguments": { "file": "Assets/Scripts/Foo.cs" } }
+      ],
+      "stopOnError": false,
+      "maxConcurrency": 8,
+      "timeoutMs": 120000
+    }
+  }
+}
+```
+
+| Parameter        | Required | Default  | Notes |
+|------------------|----------|----------|-------|
+| `calls`          | yes      | —        | 1..256 entries; each is `{id, tool, arguments}`. `id` must be unique within the batch. `tool` is any registered MCP tool name except `ide_batch` (no nesting). |
+| `project_path`   | no       | —        | Inherited into each entry's `arguments` unless the entry sets its own. |
+| `stopOnError`    | no       | `false`  | If `true`, abort on the first dispatch error; remaining entries return `status="skipped"`. |
+| `maxConcurrency` | no       | `8`      | Clamped to `[1, 16]`. |
+| `timeoutMs`      | no       | `120000` | Whole-batch wall clock budget; clamped to `[1000, 300000]`. |
+
+**Response** (wrapped in the standard `ToolCallResult` envelope):
+
+```json
+{
+  "results": [
+    { "id": "q1", "status": "ok",      "result": { "content": [...], "isError": false } },
+    { "id": "q2", "status": "error",   "error": "Tool not found: ide_find_class" },
+    { "id": "q3", "status": "skipped", "reason": "stopOnError" }
+  ],
+  "syncMs": 42,
+  "totalMs": 1180,
+  "concurrency": 8
+}
+```
+
+- `status="ok"` carries the **exact `ToolCallResult` shape** the underlying tool would have returned over a single call, so clients can reuse parsing. Tool-level errors (`result.isError=true`) remain `status="ok"`.
+- `status="error"` is reserved for dispatch failures: unknown tool name, malformed entry, nested `ide_batch`.
+- `status="skipped"` carries a `reason` of `"stopOnError"` or `"batchTimeout"`.
+
+The 256-entry limit and 300s outer cap are deliberate starting points sized for typical
+Unity-project sweeps; they live in `BatchTool.MAX_ENTRIES` / `BatchTool.MAX_BATCH_TIMEOUT_MS`
+on both variants and should be revisited with real timing data before being raised.
+
 ## Architecture
 
 ```
@@ -179,7 +273,8 @@ com.github.dungphan.unityindex
 │   ├── navigation/       # Code navigation tools (find refs, go to def, etc.)
 │   ├── intelligence/     # Diagnostics and analysis
 │   ├── project/          # Build, sync, index status
-│   └── unity/            # Unity-specific tools (asset parsing, component usage)
+│   ├── unity/            # Unity-specific tools (asset parsing, component usage)
+│   └── BatchTool.kt      # ide_batch: amortized multi-call dispatcher
 ├── handlers/             # Symbol search, scope resolution
 └── util/                 # PSI utilities, Rider protocol bridge, Unity YAML parsing
 ```

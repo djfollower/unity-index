@@ -254,13 +254,20 @@ abstract class AbstractMcpTool : McpTool {
      * @param arguments The tool arguments as a JSON object
      * @return A [ToolCallResult] containing the operation result or error
      */
-    final override suspend fun execute(project: Project, arguments: JsonObject): ToolCallResult {
+    final override suspend fun execute(project: Project, arguments: JsonObject): ToolCallResult =
+        execute(project, arguments, skipPsiSync = false)
+
+    final override suspend fun execute(
+        project: Project,
+        arguments: JsonObject,
+        skipPsiSync: Boolean
+    ): ToolCallResult {
         val executeStart = System.currentTimeMillis()
         val toolName = name
-        LOG.info("Tool execute: $toolName starting (dumbMode=${DumbService.isDumb(project)})")
+        LOG.info("Tool execute: $toolName starting (dumbMode=${DumbService.isDumb(project)}, skipPsiSync=$skipPsiSync)")
 
         val settings = McpSettings.getInstance()
-        if (requiresPsiSync && settings.syncExternalChanges) {
+        if (!skipPsiSync && requiresPsiSync && settings.syncExternalChanges) {
             ensurePsiUpToDate(project)
         }
 

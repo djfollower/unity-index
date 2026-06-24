@@ -20,6 +20,8 @@ object ToolNames {
     const val SYNC_FILES = "ide_sync_files"
     const val BUILD_PROJECT = "ide_build_project"
 
+    const val BATCH = "ide_batch"
+
     // Unity-specific tools
     const val GET_ASSEMBLY_MAP = "unity_get_assembly_map"
     const val GET_COMPONENT_USAGE = "unity_get_component_usage"

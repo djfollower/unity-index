@@ -12,7 +12,7 @@ or the standalone C# extension.
 
 ## Tools
 
-The extension provides full parity with the Rider plugin (23 tools):
+The extension provides full parity with the Rider plugin (24 tools):
 
 **Navigation** (powered by VS Code's LSP-bridging commands)
 
@@ -41,6 +41,11 @@ The extension provides full parity with the Rider plugin (23 tools):
 `unity_get_component_usage`, `unity_get_unity_event_bindings`,
 `unity_get_serialized_field_values`, `unity_find_getcomponent_patterns`,
 `unity_get_api_usage`.
+
+**Batch dispatcher**: `ide_batch` runs up to 256 tool calls in a single MCP
+request, with one shared LSP readiness probe and bounded concurrency
+(default 8, max 16). Same name, schema, and response envelope as the Rider
+plugin — see the main repo README for the full wire format.
 
 ## Transport
 
@@ -140,7 +145,7 @@ npm run package:install
 Or install a pre-built VSIX manually:
 
 ```bash
-code --install-extension build/distributions/unity-index-vscode-0.3.1.vsix
+code --install-extension build/distributions/unity-index-vscode-0.3.2.vsix
 # or, in VS Code: command palette → "Extensions: Install from VSIX..."
 ```
 

@@ -68,6 +68,13 @@ class KtorMcpServer(
         private val LOG = logger<KtorMcpServer>()
         private const val REQUEST_TIMEOUT_MS = 120_000L
         private const val REQUEST_TIMEOUT_WARNING_MS = 60_000L
+
+        // Envelope budget for `tools/call` with name=ide_batch. The batch tool
+        // itself enforces its own (smaller, client-configurable) timeout; this
+        // is the outer ceiling so a legitimate large batch doesn't get cut off
+        // by the single-call 120s budget. Must be >= BatchTool.MAX_BATCH_TIMEOUT_MS.
+        private const val BATCH_REQUEST_TIMEOUT_MS = 300_000L
+        private const val IDE_BATCH_TOOL_NAME = "ide_batch"
     }
 
     private val activeRequests = AtomicInteger(0)
@@ -348,9 +355,10 @@ class KtorMcpServer(
         // Regular request: process and return JSON response
         val currentActive = activeRequests.incrementAndGet()
         val requestStart = System.currentTimeMillis()
-        LOG.info("Request start: method=${method}, activeRequests=$currentActive")
+        val envelopeTimeoutMs = resolveEnvelopeTimeoutMs(method, parsed)
+        LOG.info("Request start: method=${method}, activeRequests=$currentActive, envelopeTimeoutMs=$envelopeTimeoutMs")
         try {
-            val response = withTimeout(REQUEST_TIMEOUT_MS) {
+            val response = withTimeout(envelopeTimeoutMs) {
                 runWithIdeModality {
                     jsonRpcHandler.handleRequest(
                         body,
@@ -372,7 +380,7 @@ class KtorMcpServer(
         } catch (e: TimeoutCancellationException) {
             val elapsed = System.currentTimeMillis() - requestStart
             LOG.error("Request TIMEOUT: method=$method after ${elapsed}ms, activeRequests=${activeRequests.get()}. " +
-                "The tool execution exceeded ${REQUEST_TIMEOUT_MS}ms — this is likely caused by EDT contention or a blocked read/write action.")
+                "The tool execution exceeded ${envelopeTimeoutMs}ms — this is likely caused by EDT contention or a blocked read/write action.")
             call.respondText(
                 createJsonRpcError(requestId, -32603, "Request timed out after ${elapsed}ms — IDE may be busy (indexing, modal dialog, or thread contention)"),
                 ContentType.Application.Json
@@ -435,7 +443,8 @@ class KtorMcpServer(
 
             val response = try {
                 val msgStart = System.currentTimeMillis()
-                val result = withTimeout(REQUEST_TIMEOUT_MS) {
+                val msgTimeoutMs = resolveBatchMessageTimeoutMs(parsed)
+                val result = withTimeout(msgTimeoutMs) {
                     runWithIdeModality {
                         jsonRpcHandler.handleRequest(
                             message.toString(),
@@ -714,6 +723,24 @@ class KtorMcpServer(
 
     private fun hasJsonRpcRequestId(parsed: JsonObject): Boolean {
         return parsed.containsKey("id") && parsed["id"] != JsonNull
+    }
+
+    /**
+     * Per-request HTTP envelope timeout. The `ide_batch` tool can amortize a
+     * large sweep across one MCP request and needs a wider budget than a single
+     * call. BatchTool itself enforces a smaller (client-configurable) budget;
+     * this only prevents the outer envelope from cutting it off.
+     */
+    private fun resolveEnvelopeTimeoutMs(method: String?, parsed: JsonObject): Long {
+        if (method != "tools/call") return REQUEST_TIMEOUT_MS
+        val toolName = parsed["params"]?.let { it as? JsonObject }
+            ?.get("name")?.jsonPrimitive?.contentOrNull
+        return if (toolName == IDE_BATCH_TOOL_NAME) BATCH_REQUEST_TIMEOUT_MS else REQUEST_TIMEOUT_MS
+    }
+
+    private fun resolveBatchMessageTimeoutMs(message: JsonObject): Long {
+        val method = message["method"]?.jsonPrimitive?.contentOrNull
+        return resolveEnvelopeTimeoutMs(method, message)
     }
 
     private fun classifyStreamableBatch(batch: JsonArray): StreamableBatchKind? {

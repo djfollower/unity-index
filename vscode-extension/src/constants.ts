@@ -1,5 +1,5 @@
 export const SERVER_NAME = "unity-index-mcp";
-export const SERVER_VERSION = "0.1.0";
+export const SERVER_VERSION = "0.3.2";
 export const SERVER_DESCRIPTION =
   "Code intelligence server for Unity C# projects in VS Code (C# Dev Kit / Roslyn LSP). " +
   "Use this instead of grep/ripgrep for semantic code understanding. " +
@@ -37,6 +37,9 @@ export const TOOL_NAMES = {
   INDEX_STATUS: "ide_index_status",
   SYNC_FILES: "ide_sync_files",
   BUILD_PROJECT: "ide_build_project",
+
+  // Batch dispatcher
+  BATCH: "ide_batch",
 
   // Unity
   GET_ASSEMBLY_MAP: "unity_get_assembly_map",

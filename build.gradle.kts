@@ -82,4 +82,16 @@ tasks {
     buildPlugin {
         archiveBaseName.set("unity-index-rider")
     }
+
+    // Inject `pluginVersion` from gradle.properties into version.properties so
+    // McpConstants.SERVER_VERSION can read it at runtime without us having to
+    // hand-edit the constant on every release. Drift-proof — same source of
+    // truth as the artifact filename.
+    processResources {
+        val pluginVersion = providers.gradleProperty("pluginVersion")
+        inputs.property("pluginVersion", pluginVersion)
+        filesMatching("version.properties") {
+            expand("pluginVersion" to pluginVersion.get())
+        }
+    }
 }

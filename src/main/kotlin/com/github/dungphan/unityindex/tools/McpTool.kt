@@ -116,4 +116,20 @@ interface McpTool {
      * @see AbstractMcpTool.doExecute
      */
     suspend fun execute(project: Project, arguments: JsonObject): ToolCallResult
+
+    /**
+     * Variant of [execute] used by batch dispatchers (e.g. `ide_batch`) that have
+     * already performed the expensive per-call setup once for the whole batch.
+     *
+     * Default delegates to [execute]. Implementations whose [execute] does heavy
+     * shared work (PSI sync, readiness probing) should override this to skip it.
+     *
+     * @param skipPsiSync if true, the implementation must not run PSI / VFS
+     *                    synchronization — the caller has already done it.
+     */
+    suspend fun execute(
+        project: Project,
+        arguments: JsonObject,
+        skipPsiSync: Boolean
+    ): ToolCallResult = execute(project, arguments)
 }

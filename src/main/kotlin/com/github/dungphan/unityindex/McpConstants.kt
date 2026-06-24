@@ -1,8 +1,26 @@
 package com.github.dungphan.unityindex
 
 import com.github.dungphan.unityindex.util.IdeProductInfo
+import java.util.Properties
 
 object McpConstants {
+
+    // Sourced from src/main/resources/version.properties, which is populated
+    // at build time by the `processResources` task in build.gradle.kts from
+    // `pluginVersion` in gradle.properties. Keep this loader logic — do not
+    // hard-code the version here; gradle.properties is the source of truth.
+    private fun loadServerVersion(): String {
+        val stream = McpConstants::class.java.classLoader
+            .getResourceAsStream("version.properties")
+            ?: return "unknown"
+        return stream.use {
+            val props = Properties()
+            props.load(it)
+            props.getProperty("version")?.takeIf { v -> v.isNotBlank() && v != "\${pluginVersion}" }
+                ?: "unknown"
+        }
+    }
+
     const val PLUGIN_NAME = "Unity Index MCP Server"
     const val TOOL_WINDOW_ID = PLUGIN_NAME
     const val NOTIFICATION_GROUP_ID = PLUGIN_NAME
@@ -32,6 +50,6 @@ object McpConstants {
     fun getServerName(): String = IdeProductInfo.getServerName()
 
     const val SERVER_NAME = "unity-index-mcp"
-    const val SERVER_VERSION = "0.1.0"
+    val SERVER_VERSION: String = loadServerVersion()
     const val SERVER_DESCRIPTION = "Code intelligence server for Unity C# projects in JetBrains Rider. Use this instead of grep/ripgrep for semantic code understanding. Capabilities: find usages, go to definition, type/call hierarchies, find implementations, symbol search, diagnostics."
 }

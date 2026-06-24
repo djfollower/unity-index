@@ -40,6 +40,9 @@ import { GetSerializedFieldValuesTool } from "./tools/unity/getSerializedFieldVa
 import { FindGetComponentPatternsTool } from "./tools/unity/findGetComponentPatternsTool";
 import { GetApiUsageTool } from "./tools/unity/getApiUsageTool";
 
+// Batch dispatcher
+import { BatchTool } from "./tools/batchTool";
+
 interface RunningServer {
   http: HttpServer;
   readiness: ReadinessGate;
@@ -83,6 +86,9 @@ function buildRegistry(): ToolRegistry {
   registry.register(new GetSerializedFieldValuesTool());
   registry.register(new FindGetComponentPatternsTool());
   registry.register(new GetApiUsageTool());
+  // Batch dispatcher must be registered last — it holds a reference to the
+  // registry so it can dispatch entries to any other registered tool.
+  registry.register(new BatchTool(registry));
   return registry;
 }
 

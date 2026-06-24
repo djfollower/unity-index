@@ -77,6 +77,10 @@ class ToolRegistry {
         registerUnityTools()
         registerLanguageNavigationTools()
 
+        // BatchTool must be registered last — it holds a reference to `this`
+        // registry so it can dispatch entries to any other registered tool.
+        register(BatchTool(this))
+
         LOG.info("Registered ${tools.size} built-in MCP tools")
         logAvailableLanguages()
     }
