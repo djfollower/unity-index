@@ -1,13 +1,16 @@
 package com.github.dungphan.unityindex.handlers
 
 import com.github.dungphan.unityindex.util.ProjectUtils
+import com.github.dungphan.unityindex.util.RiderNavigationProbe
 import com.intellij.navigation.ChooseByNameContributor
 import com.intellij.navigation.ChooseByNameContributorEx
 import com.intellij.navigation.NavigationItem
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiNameIdentifierOwner
 import com.intellij.psi.PsiNamedElement
 import com.intellij.psi.codeStyle.MinusculeMatcher
 import com.intellij.psi.search.GlobalSearchScope
@@ -191,6 +194,11 @@ object OptimizedSymbolSearch {
 
     /**
      * Convert a NavigationItem or PsiElement to SymbolData.
+     *
+     * Returns null when the item can't be located to a real source position. In Rider, C# symbols
+     * arrive as RD-backed proxy NavigationItems whose PSI surface reports textOffset=0 and empty
+     * Language; emitting them as (line: 1, column: 1) would look like a text-search fallback to
+     * callers. We try PSI first, then fall back to a reflective probe of the NavigationItem itself.
      */
     private fun convertToSymbolData(
         item: NavigationItem,
@@ -201,28 +209,17 @@ object OptimizedSymbolSearch {
         val element = when (item) {
             is PsiElement -> item
             else -> {
-                // Try to extract PsiElement from NavigationItem
                 try {
                     val method = item.javaClass.getMethod("getElement")
                     method.invoke(item) as? PsiElement
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     null
                 }
             }
         } ?: return null
 
         val targetElement = element.navigationElement ?: element
-        val language = getLanguageName(targetElement)
-
-        // Apply language filter if specified (case-insensitive — the tool's `language`
-        // parameter is user-facing and may be "kotlin", "Kotlin", "KOTLIN", etc.)
-        if (languageFilter != null && languageFilter.none { it.equals(language, ignoreCase = true) }) {
-            return null
-        }
-
-        val file = targetElement.containingFile?.virtualFile ?: return null
-        if (!scope.contains(file)) return null
-        val relativePath = ProjectUtils.getToolFilePath(project, file)
+        val psiLanguage = getLanguageName(targetElement)
 
         val name = when (targetElement) {
             is PsiNamedElement -> targetElement.name
@@ -230,21 +227,29 @@ object OptimizedSymbolSearch {
                 try {
                     val method = targetElement.javaClass.getMethod("getName")
                     method.invoke(targetElement) as? String
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     null
                 }
             }
-        } ?: return null
+        }?.takeIf { it.isNotBlank() } ?: item.name?.takeIf { it.isNotBlank() } ?: return null
 
         val directQualifiedName = try {
             val method = targetElement.javaClass.getMethod("getQualifiedName")
             method.invoke(targetElement) as? String
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
         val qualifiedName = directQualifiedName ?: buildQualifiedNameFromContainer(targetElement, name)
 
-        val line = getLineNumber(project, targetElement) ?: 1
+        val position = resolvePosition(item, targetElement, project) ?: return null
+        if (!scope.contains(position.file)) return null
+
+        val language = if (psiLanguage.isNotBlank()) psiLanguage else inferLanguageFromExtension(position.file)
+        if (languageFilter != null && languageFilter.none { it.equals(language, ignoreCase = true) }) {
+            return null
+        }
+
+        val relativePath = ProjectUtils.getToolFilePath(project, position.file)
         val kind = determineKind(targetElement)
         val containerName = getContainerName(targetElement)
 
@@ -253,11 +258,49 @@ object OptimizedSymbolSearch {
             qualifiedName = qualifiedName,
             kind = kind,
             file = relativePath,
-            line = line,
-            column = getColumnNumber(project, targetElement) ?: 1,
+            line = position.line,
+            column = position.column,
             containerName = containerName,
             language = language
         )
+    }
+
+    private data class ResolvedPosition(val file: VirtualFile, val line: Int, val column: Int)
+
+    private fun resolvePosition(
+        item: NavigationItem,
+        targetElement: PsiElement,
+        project: Project
+    ): ResolvedPosition? {
+        val psiFile = targetElement.containingFile?.virtualFile
+        if (psiFile != null) {
+            val document = getDocument(project, targetElement)
+            val offset = document?.let { resolveOffset(targetElement, it) }
+            if (document != null && offset != null) {
+                val lineIndex = document.getLineNumber(offset)
+                val column = offset - document.getLineStartOffset(lineIndex) + 1
+                return ResolvedPosition(psiFile, lineIndex + 1, column)
+            }
+        }
+
+        val probe = RiderNavigationProbe.probe(item, project)
+        if (probe != null) {
+            LOG.debug("Recovered position via RiderNavigationProbe: ${item.javaClass.name} -> ${probe.file.name}:${probe.line}:${probe.column}")
+            return ResolvedPosition(probe.file, probe.line, probe.column)
+        }
+
+        LOG.debug("Dropping symbol: no resolvable position for ${item.javaClass.name}")
+        return null
+    }
+
+    private fun inferLanguageFromExtension(file: VirtualFile): String {
+        return when (file.extension?.lowercase()) {
+            "cs" -> "C#"
+            "shader" -> "ShaderLab"
+            "uxml" -> "XML"
+            "uss" -> "CSS"
+            else -> ""
+        }
     }
 
     private fun buildQualifiedNameFromContainer(element: PsiElement, name: String): String? {
@@ -296,18 +339,29 @@ object OptimizedSymbolSearch {
 
     private fun getLineNumber(project: Project, element: PsiElement): Int? {
         val document = getDocument(project, element) ?: return null
-        val offset = resolveOffset(element, document)
+        val offset = resolveOffset(element, document) ?: return null
         return document.getLineNumber(offset) + 1
     }
 
     private fun getColumnNumber(project: Project, element: PsiElement): Int? {
         val document = getDocument(project, element) ?: return null
-        val offset = resolveOffset(element, document)
+        val offset = resolveOffset(element, document) ?: return null
         val lineNumber = document.getLineNumber(offset)
         return offset - document.getLineStartOffset(lineNumber) + 1
     }
 
-    private fun resolveOffset(element: PsiElement, document: com.intellij.openapi.editor.Document): Int {
+    /**
+     * Returns null when the element doesn't expose a usable source offset — typically Rider RD-backed
+     * proxy elements where textOffset == 0 and textRange is empty. Callers should treat null as
+     * "this element can't be positioned via PSI" and fall back to a NavigationItem-level probe.
+     */
+    private fun resolveOffset(element: PsiElement, document: com.intellij.openapi.editor.Document): Int? {
+        // Prefer the name identifier's offset — for a class declaration with leading attributes
+        // like [CreateAssetMenu(...)], element.textOffset can point at the attribute (or to 0)
+        // while the actual identifier sits later in the declaration.
+        val nameIdentifierOffset = (element as? PsiNameIdentifierOwner)?.nameIdentifier?.textOffset
+        if (nameIdentifierOffset != null && nameIdentifierOffset > 0) return nameIdentifierOffset
+
         val offset = element.textOffset
         if (offset > 0) return offset
 
@@ -316,13 +370,23 @@ object OptimizedSymbolSearch {
         if (rawName != null && rawName.length > 1) {
             val identifier = rawName.substringBefore('(').substringBefore(':').trim()
             if (identifier.isNotEmpty()) {
-                val text = document.text
-                val identifierPattern = Regex("\\b${Regex.escape(identifier)}\\b")
-                val match = identifierPattern.find(text)
-                if (match != null) return match.range.first
+                // Scope the regex search to the element's own text range — searching the whole
+                // document would otherwise return the first occurrence anywhere in the file,
+                // including inside earlier string literals, comments, or attribute arguments.
+                val elementRange = element.textRange
+                if (elementRange != null && elementRange.length > 0) {
+                    val rangeStart = elementRange.startOffset.coerceAtLeast(0)
+                    val rangeEnd = elementRange.endOffset.coerceAtMost(document.textLength)
+                    if (rangeStart < rangeEnd) {
+                        val haystack = document.getText(com.intellij.openapi.util.TextRange(rangeStart, rangeEnd))
+                        val identifierPattern = Regex("\\b${Regex.escape(identifier)}\\b")
+                        val match = identifierPattern.find(haystack)
+                        if (match != null) return rangeStart + match.range.first
+                    }
+                }
             }
         }
-        return offset
+        return null
     }
 
     private fun determineKind(element: PsiElement): String {

@@ -203,6 +203,7 @@ export interface SearchTextResult {
   matches: TextMatch[];
   totalCount: number;
   query: string;
+  hint?: string;
 }
 
 export interface FileStructureItem {

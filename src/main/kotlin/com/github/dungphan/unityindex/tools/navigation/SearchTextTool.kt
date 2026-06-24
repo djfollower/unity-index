@@ -98,7 +98,8 @@ class SearchTextTool : AbstractMcpTool() {
                     totalCollected = page.totalCollected,
                     offset = page.offset,
                     pageSize = page.pageSize,
-                    stale = page.stale
+                    stale = page.stale,
+                    hint = computeEmptyResultHint(page.metadata["filePattern"], page.totalCollected)
                 )
             }
         }
@@ -178,8 +179,28 @@ class SearchTextTool : AbstractMcpTool() {
                 totalCollected = page.totalCollected,
                 offset = page.offset,
                 pageSize = page.pageSize,
-                stale = page.stale
+                stale = page.stale,
+                hint = computeEmptyResultHint(filePattern, page.totalCollected)
             )
+        }
+    }
+
+    private fun computeEmptyResultHint(filePattern: String?, totalCollected: Int): String? {
+        if (totalCollected > 0) return null
+        if (isUnityAssetMask(filePattern)) {
+            return "No matches. Unity YAML assets (.asset/.prefab/.unity/.meta/…) are not reliably word-indexed by IntelliJ IDEA, so ide_search_text can return zero even when the file actually contains the term. To find references to a ScriptableObject, Component, or prefab/scene usages, prefer unity_get_component_usage — it parses Unity YAML and resolves GUID/fileID links."
+        }
+        if (!filePattern.isNullOrBlank()) {
+            return "No matches found within files matching filePattern='$filePattern'. Verify the mask uses IntelliJ syntax (e.g. '*.cs,!*Test.cs') and that those files are indexed by the IDE."
+        }
+        return null
+    }
+
+    private fun isUnityAssetMask(filePattern: String?): Boolean {
+        if (filePattern.isNullOrBlank()) return false
+        val unityExts = setOf("asset", "prefab", "unity", "meta", "mat", "anim", "controller", "asmdef")
+        return filePattern.split(',').any { token ->
+            token.trim().substringAfterLast('.', "").lowercase() in unityExts
         }
     }
 

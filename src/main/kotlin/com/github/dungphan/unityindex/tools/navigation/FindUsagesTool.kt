@@ -386,18 +386,66 @@ class FindUsagesTool : AbstractMcpTool() {
     }
 
     private fun classifyUsage(element: PsiElement): String {
-        val parent = element.parent
-        val parentClass = parent?.javaClass?.simpleName ?: "Unknown"
+        val parent = element.parent ?: return UsageTypes.REFERENCE
+        val parentClass = parent.javaClass.simpleName
 
         return when {
-            parentClass.contains("MethodCall") -> UsageTypes.METHOD_CALL
-            parentClass.contains("Reference") -> UsageTypes.REFERENCE
+            // Order matters: more specific patterns first.
+            parentClass.contains("MethodCall") || parentClass.contains("Invocation") -> UsageTypes.METHOD_CALL
+            parentClass.contains("NewExpression") || parentClass.contains("ObjectCreation") ||
+                parentClass.contains("ArrayCreation") -> UsageTypes.CONSTRUCTOR_CALL
+            parentClass.contains("TypeOf") || parentClass.contains("TypeArgument") ||
+                parentClass.contains("TypeUsage") -> UsageTypes.TYPE_REFERENCE
+            parentClass.contains("Attribute") -> UsageTypes.ATTRIBUTE
+            parentClass.contains("FieldDeclaration") -> UsageTypes.FIELD_DECLARATION
+            parentClass.contains("PropertyDeclaration") -> UsageTypes.PROPERTY_DECLARATION
             parentClass.contains("Field") -> UsageTypes.FIELD_ACCESS
-            parentClass.contains("Import") -> UsageTypes.IMPORT
+            parentClass.contains("Import") || parentClass.contains("Using") -> UsageTypes.IMPORT
             parentClass.contains("Parameter") -> UsageTypes.PARAMETER
             parentClass.contains("Variable") -> UsageTypes.VARIABLE
             else -> UsageTypes.REFERENCE
-            }
+        }
+    }
+
+    private fun classifyRdUsage(usage: RiderProtocolHost.RdUsageResult): String {
+        // Rider's UsageView attaches a group describing the kind of usage
+        // (e.g. "New instance creation", "Type argument", "Field declaration").
+        // Prefer that over read/write flags, which only describe value access
+        // and are meaningless for type-level references.
+        for (group in usage.groupTexts) {
+            classifyFromGroupText(group)?.let { return it }
+        }
+        return when {
+            usage.isWrite -> UsageTypes.WRITE
+            usage.isRead -> UsageTypes.READ
+            else -> UsageTypes.REFERENCE
+        }
+    }
+
+    private fun classifyFromGroupText(text: String): String? {
+        if (text.isBlank()) return null
+        val t = text.lowercase()
+        return when {
+            "typeof" in t -> UsageTypes.TYPE_REFERENCE
+            "type argument" in t -> UsageTypes.TYPE_REFERENCE
+            "type constraint" in t -> UsageTypes.TYPE_REFERENCE
+            "base type" in t || "base class" in t || "base interface" in t -> UsageTypes.TYPE_REFERENCE
+            "type check" in t || "is-expression" in t || "is expression" in t -> UsageTypes.TYPE_REFERENCE
+            "cast" in t -> UsageTypes.TYPE_REFERENCE
+            "extends list" in t || "implements list" in t -> UsageTypes.TYPE_REFERENCE
+            "new instance" in t || "object creation" in t -> UsageTypes.CONSTRUCTOR_CALL
+            "new array" in t || "array creation" in t -> UsageTypes.CONSTRUCTOR_CALL
+            "attribute" in t -> UsageTypes.ATTRIBUTE
+            "field declaration" in t -> UsageTypes.FIELD_DECLARATION
+            "property declaration" in t -> UsageTypes.PROPERTY_DECLARATION
+            "method declaration" in t || "function declaration" in t -> UsageTypes.METHOD_DECLARATION
+            "method call" in t || "method invocation" in t || "invocation" in t -> UsageTypes.METHOD_CALL
+            "member access" in t || "static class member access" in t || "nameof" in t -> UsageTypes.MEMBER_ACCESS
+            "parameter declaration" in t -> UsageTypes.PARAMETER
+            "local variable" in t || "variable declaration" in t -> UsageTypes.VARIABLE
+            "using directive" in t || "import" in t -> UsageTypes.IMPORT
+            else -> null
+        }
     }
 
     private suspend fun tryRiderFindUsages(
@@ -422,11 +470,7 @@ class FindUsagesTool : AbstractMcpTool() {
 
         val usages = rdUsages.map { usage ->
             val relPath = ProjectUtils.getRelativePath(project, usage.filePath)
-            val type = when {
-                usage.isWrite -> UsageTypes.FIELD_ACCESS
-                usage.isRead -> UsageTypes.REFERENCE
-                else -> UsageTypes.REFERENCE
-            }
+            val type = classifyRdUsage(usage)
             UsageLocation(
                 file = relPath,
                 line = usage.line,

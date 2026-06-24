@@ -15,9 +15,11 @@ import com.github.dungphan.unityindex.tools.models.FindClassResult
 import com.github.dungphan.unityindex.tools.models.SymbolMatch
 import com.github.dungphan.unityindex.tools.schema.SchemaBuilder
 import com.github.dungphan.unityindex.util.ProjectUtils
+import com.github.dungphan.unityindex.util.RiderNavigationProbe
 import com.intellij.navigation.ChooseByNameContributor
 import com.intellij.navigation.ChooseByNameContributorEx
 import com.intellij.navigation.NavigationItem
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
@@ -337,11 +339,7 @@ class FindClassTool : AbstractMcpTool() {
         val element = extractPsiElement(item) ?: return null
         val targetElement = element.navigationElement ?: element
 
-        val file = targetElement.containingFile?.virtualFile ?: return null
-        if (!scope.contains(file)) return null
-        val relativePath = ProjectUtils.getToolFilePath(project, file)
-
-        val name = when (targetElement) {
+        val name = (when (targetElement) {
             is PsiNamedElement -> targetElement.name
             else -> {
                 try {
@@ -351,29 +349,60 @@ class FindClassTool : AbstractMcpTool() {
                     null
                 }
             }
-        } ?: return null
+        }?.takeIf { it.isNotBlank() }) ?: item.name?.takeIf { it.isNotBlank() } ?: return null
 
         val qualifiedName = try {
             val method = targetElement.javaClass.getMethod("getQualifiedName")
             method.invoke(targetElement) as? String
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
 
-        val line = getLineNumber(project, targetElement) ?: 1
+        val position = resolvePosition(item, targetElement, project) ?: return null
+        if (!scope.contains(position.file)) return null
+        val relativePath = ProjectUtils.getToolFilePath(project, position.file)
         val kind = determineKind(targetElement)
-        val language = getLanguageName(targetElement)
+        val psiLanguage = getLanguageName(targetElement)
+        val language = if (psiLanguage.isNotBlank()) psiLanguage else inferLanguageFromExtension(position.file)
 
         return SymbolMatch(
             name = name,
             qualifiedName = qualifiedName,
             kind = kind,
             file = relativePath,
-            line = line,
-            column = getColumnNumber(project, targetElement) ?: 1,
+            line = position.line,
+            column = position.column,
             containerName = null,
             language = language
         )
+    }
+
+    private data class ResolvedPosition(val file: VirtualFile, val line: Int, val column: Int)
+
+    private fun resolvePosition(item: NavigationItem, targetElement: PsiElement, project: Project): ResolvedPosition? {
+        val psiFile = targetElement.containingFile?.virtualFile
+        if (psiFile != null) {
+            val document = getDocument(project, targetElement)
+            val offset = document?.let { resolveOffset(targetElement, it) }
+            if (document != null && offset != null) {
+                val lineIndex = document.getLineNumber(offset)
+                val column = offset - document.getLineStartOffset(lineIndex) + 1
+                return ResolvedPosition(psiFile, lineIndex + 1, column)
+            }
+        }
+
+        val probe = RiderNavigationProbe.probe(item, project) ?: return null
+        return ResolvedPosition(probe.file, probe.line, probe.column)
+    }
+
+    private fun inferLanguageFromExtension(file: VirtualFile): String {
+        return when (file.extension?.lowercase()) {
+            "cs" -> "C#"
+            "shader" -> "ShaderLab"
+            "uxml" -> "XML"
+            "uss" -> "CSS"
+            else -> ""
+        }
     }
 
     private fun extractPsiElement(item: NavigationItem): PsiElement? {
@@ -399,7 +428,12 @@ class FindClassTool : AbstractMcpTool() {
             }
     }
 
-    private fun resolveOffset(element: PsiElement, document: com.intellij.openapi.editor.Document): Int {
+    /**
+     * Returns null when the element doesn't expose a usable source offset (typically Rider RD-backed
+     * proxies). Callers should fall back to a NavigationItem-level probe rather than emitting a
+     * synthetic (1, 1) position.
+     */
+    private fun resolveOffset(element: PsiElement, document: com.intellij.openapi.editor.Document): Int? {
         val offset = element.textOffset
         if (offset > 0) return offset
 
@@ -414,18 +448,18 @@ class FindClassTool : AbstractMcpTool() {
                 if (match != null) return match.range.first
             }
         }
-        return offset
+        return null
     }
 
     private fun getLineNumber(project: Project, element: PsiElement): Int? {
         val document = getDocument(project, element) ?: return null
-        val offset = resolveOffset(element, document)
+        val offset = resolveOffset(element, document) ?: return null
         return document.getLineNumber(offset) + 1
     }
 
     private fun getColumnNumber(project: Project, element: PsiElement): Int? {
         val document = getDocument(project, element) ?: return null
-        val offset = resolveOffset(element, document)
+        val offset = resolveOffset(element, document) ?: return null
         val lineNumber = document.getLineNumber(offset)
         return offset - document.getLineStartOffset(lineNumber) + 1
     }

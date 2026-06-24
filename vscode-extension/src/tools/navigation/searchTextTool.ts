@@ -79,9 +79,45 @@ export class SearchTextTool extends AbstractMcpTool {
       matches,
       totalCount: matches.length,
       query,
+      hint: computeEmptyResultHint(filePattern, matches.length) ?? undefined,
     };
     return this.json(result);
   }
+}
+
+const UNITY_ASSET_EXTS = new Set([
+  "asset",
+  "prefab",
+  "unity",
+  "meta",
+  "mat",
+  "anim",
+  "controller",
+  "asmdef",
+]);
+
+function isUnityAssetMask(filePattern: string | undefined): boolean {
+  if (!filePattern) return false;
+  return filePattern.split(",").some((token) => {
+    const trimmed = token.trim();
+    const dot = trimmed.lastIndexOf(".");
+    if (dot < 0) return false;
+    return UNITY_ASSET_EXTS.has(trimmed.slice(dot + 1).toLowerCase());
+  });
+}
+
+function computeEmptyResultHint(
+  filePattern: string | undefined,
+  totalMatches: number,
+): string | null {
+  if (totalMatches > 0) return null;
+  if (isUnityAssetMask(filePattern)) {
+    return "No matches. To find references to a ScriptableObject, Component, or prefab/scene usages inside Unity assets, prefer unity_get_component_usage — it parses Unity YAML and resolves GUID/fileID links instead of plain text matching.";
+  }
+  if (filePattern && filePattern.length > 0) {
+    return `No matches found within files matching filePattern='${filePattern}'. Verify the glob (e.g. '**/*.cs') and that those files are not under an excluded directory.`;
+  }
+  return null;
 }
 
 function buildRegex(

@@ -351,7 +351,8 @@ data class SearchTextResult(
     val totalCollected: Int = 0,
     val offset: Int = 0,
     val pageSize: Int = 0,
-    val stale: Boolean = false
+    val stale: Boolean = false,
+    val hint: String? = null
 )
 
 @Serializable

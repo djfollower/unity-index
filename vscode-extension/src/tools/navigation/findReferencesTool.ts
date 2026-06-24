@@ -49,7 +49,7 @@ export class FindReferencesTool extends AbstractMcpTool {
         line: startLine + 1,
         column: loc.range.start.character + 1,
         context,
-        type: "reference",
+        type: "REFERENCE",
         astPath: [],
       });
     }
