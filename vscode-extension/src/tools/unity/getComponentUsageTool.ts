@@ -1,13 +1,13 @@
-import { AbstractMcpTool } from "../abstractTool";
+import { AbstractMcpTool, ToolContext } from "../abstractTool";
 import { TOOL_NAMES } from "../../constants";
 import { ToolCallResult } from "../../models/jsonRpc";
 import { ProjectContext } from "../../server/projectResolver";
 import { Args, requireString } from "../../utils/args";
 import { SchemaBuilder } from "../../utils/schema";
-import { UnityAssetIndex } from "../../utils/unityAssetIndex";
 
 export class GetComponentUsageTool extends AbstractMcpTool {
   protected readonly requiresLsp = false;
+  readonly isHeavyScan = true;
 
   readonly name = TOOL_NAMES.GET_COMPONENT_USAGE;
   readonly description =
@@ -21,10 +21,11 @@ export class GetComponentUsageTool extends AbstractMcpTool {
   protected async doExecute(
     project: ProjectContext,
     args: Args,
+    ctx: ToolContext,
   ): Promise<ToolCallResult> {
     const typeName = requireString(args, "typeName");
-    const index = new UnityAssetIndex(project);
-    const result = index.findComponentUsages(typeName);
+    const index = await ctx.assetIndex.get(project);
+    const result = await index.findComponentUsages(typeName, ctx.signal);
     if (result.scriptGuid === null) {
       return this.error(
         `No .cs script file found matching type name '${typeName}'. ` +

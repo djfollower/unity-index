@@ -189,6 +189,24 @@ export class BatchTool extends AbstractMcpTool {
     let inFlight = 0;
     let nextIndex = 0;
 
+    // Heavy-scan lane: at most one project-walk runs at a time so it can't
+    // starve LSP-bound entries on Node's single thread. Non-heavy entries
+    // continue to use the main concurrency budget.
+    let heavyBusy = false;
+    const heavyWaiters: Array<() => void> = [];
+    const acquireHeavy = (): Promise<void> => {
+      if (!heavyBusy) {
+        heavyBusy = true;
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => heavyWaiters.push(resolve));
+    };
+    const releaseHeavy = () => {
+      const next = heavyWaiters.shift();
+      if (next) next();
+      else heavyBusy = false;
+    };
+
     await new Promise<void>((resolve) => {
       const watchdog = setTimeout(() => {
         timedOut = true;
@@ -210,7 +228,23 @@ export class BatchTool extends AbstractMcpTool {
             continue;
           }
           inFlight++;
-          runEntry(this.registry, entry, inheritedProjectPath, project, ctx)
+          const tool = this.registry.getTool(entry.tool);
+          const heavy = tool?.isHeavyScan === true;
+          const run = async (): Promise<EntryResult> => {
+            if (heavy) await acquireHeavy();
+            try {
+              return await runEntry(
+                this.registry,
+                entry,
+                inheritedProjectPath,
+                project,
+                ctx,
+              );
+            } finally {
+              if (heavy) releaseHeavy();
+            }
+          };
+          run()
             .then((r) => {
               results[i] = r;
               if (stopOnError && r.kind === "error") aborted = true;

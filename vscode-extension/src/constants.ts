@@ -49,6 +49,7 @@ export const TOOL_NAMES = {
   GET_SERIALIZED_FIELD_VALUES: "unity_get_serialized_field_values",
   GET_PROJECT_CONTEXT: "unity_get_project_context",
   GET_API_USAGE: "unity_get_api_usage",
+  FIND_ASSET_REFERENCES: "unity_find_asset_references",
 } as const;
 
 export const PARAM_NAMES = {

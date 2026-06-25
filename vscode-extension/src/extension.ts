@@ -8,6 +8,7 @@ import { JsonRpcHandler } from "./server/jsonRpcHandler";
 import { HttpServer } from "./server/httpServer";
 import { ReadinessGate } from "./server/readinessGate";
 import { ToolContext } from "./tools/abstractTool";
+import { UnityAssetIndexManager } from "./utils/unityAssetIndexManager";
 
 // Navigation
 import { FindReferencesTool } from "./tools/navigation/findReferencesTool";
@@ -39,6 +40,7 @@ import { GetUnityEventBindingsTool } from "./tools/unity/getUnityEventBindingsTo
 import { GetSerializedFieldValuesTool } from "./tools/unity/getSerializedFieldValuesTool";
 import { FindGetComponentPatternsTool } from "./tools/unity/findGetComponentPatternsTool";
 import { GetApiUsageTool } from "./tools/unity/getApiUsageTool";
+import { FindAssetReferencesTool } from "./tools/unity/findAssetReferencesTool";
 
 // Batch dispatcher
 import { BatchTool } from "./tools/batchTool";
@@ -46,6 +48,7 @@ import { BatchTool } from "./tools/batchTool";
 interface RunningServer {
   http: HttpServer;
   readiness: ReadinessGate;
+  assetIndex: UnityAssetIndexManager;
   port: number;
   socketPath?: string;
 }
@@ -86,6 +89,7 @@ function buildRegistry(): ToolRegistry {
   registry.register(new GetSerializedFieldValuesTool());
   registry.register(new FindGetComponentPatternsTool());
   registry.register(new GetApiUsageTool());
+  registry.register(new FindAssetReferencesTool());
   // Batch dispatcher must be registered last — it holds a reference to the
   // registry so it can dispatch entries to any other registered tool.
   registry.register(new BatchTool(registry));
@@ -115,9 +119,10 @@ async function startServer(): Promise<void> {
 
   const readiness = new ReadinessGate();
   readiness.start();
+  const assetIndex = new UnityAssetIndexManager(log);
 
   const registry = buildRegistry();
-  const toolCtx: ToolContext = { readiness, readinessTimeoutMs, log };
+  const toolCtx: ToolContext = { readiness, readinessTimeoutMs, log, assetIndex };
   const handler = new JsonRpcHandler(registry, toolCtx);
   const http = new HttpServer(handler, log);
 
@@ -144,7 +149,13 @@ async function startServer(): Promise<void> {
     }
   }
 
-  running = { http, readiness, port, socketPath: useUnixSocket ? socketPath : undefined };
+  running = {
+    http,
+    readiness,
+    assetIndex,
+    port,
+    socketPath: useUnixSocket ? socketPath : undefined,
+  };
 
   vscode.window.setStatusBarMessage(`Unity Index MCP: http://${host}:${port}`, 5000);
 }
@@ -157,6 +168,7 @@ async function stopServer(): Promise<void> {
   log("Stopping MCP server...");
   await running.http.stop();
   running.readiness.stop();
+  running.assetIndex.dispose();
   if (running.socketPath && process.platform !== "win32") {
     try { fs.unlinkSync(running.socketPath); } catch { /* ignore */ }
   }

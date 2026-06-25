@@ -17,6 +17,34 @@ interface SseSession {
   protocolVersion: string;
 }
 
+/**
+ * Server-side request budget. MCP clients commonly time out around 60s, so we
+ * give ourselves a slightly shorter ceiling to return a structured tool error
+ * instead of letting the client see a hard `HTTP 0` socket abort. Tools that
+ * accept the AbortSignal stop their walks promptly when the budget fires.
+ */
+const REQUEST_TIMEOUT_MS = 55_000;
+
+function timeoutToolError(toolBudgetMs: number): JsonRpcResponse {
+  return {
+    jsonrpc: "2.0",
+    id: null,
+    result: {
+      content: [
+        {
+          type: "text",
+          text:
+            `Server budget of ${toolBudgetMs}ms exceeded. ` +
+            "If this was a Unity asset scan, the first call after a workspace change rebuilds the index — " +
+            "check ide_index_status and retry once unityAssets.state == \"ready\". " +
+            "Otherwise narrow the query (smaller filePattern, fewer results, single target).",
+        },
+      ],
+      isError: true,
+    },
+  };
+}
+
 export class HttpServer {
   private server?: http.Server;
   private socketServer?: net.Server;
@@ -158,7 +186,7 @@ export class HttpServer {
     res: http.ServerResponse,
   ): Promise<void> {
     const body = await this.readBody(req);
-    const result = await this.handler.handle(body, MCP_PROTOCOL_VERSION_STREAMABLE);
+    const result = await this.runWithBudget(req, body, MCP_PROTOCOL_VERSION_STREAMABLE);
     if (result === null) {
       // Notification — empty response.
       res.writeHead(204).end();
@@ -173,13 +201,47 @@ export class HttpServer {
     res: http.ServerResponse,
   ): Promise<void> {
     const body = await this.readBody(req);
-    const result = await this.handler.handle(body, MCP_PROTOCOL_VERSION_LEGACY);
+    const result = await this.runWithBudget(req, body, MCP_PROTOCOL_VERSION_LEGACY);
     if (result === null) {
       res.writeHead(204).end();
       return;
     }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(result));
+  }
+
+  /**
+   * Race the tool dispatch against REQUEST_TIMEOUT_MS. Aborts the signal on
+   * timeout or socket close so tools that honor it can stop their walks
+   * promptly instead of running orphaned.
+   */
+  private async runWithBudget(
+    req: http.IncomingMessage,
+    body: string,
+    protocolVersion: string,
+  ): Promise<JsonRpcResponse | JsonRpcResponse[] | null> {
+    const ac = new AbortController();
+    const onClose = () => ac.abort();
+    req.on("close", onClose);
+
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await new Promise<JsonRpcResponse | JsonRpcResponse[] | null>(
+        (resolve, reject) => {
+          timer = setTimeout(() => {
+            ac.abort();
+            this.log(`HTTP request budget exceeded (${REQUEST_TIMEOUT_MS}ms)`);
+            resolve(timeoutToolError(REQUEST_TIMEOUT_MS));
+          }, REQUEST_TIMEOUT_MS);
+          this.handler
+            .handle(body, protocolVersion, ac.signal)
+            .then(resolve, reject);
+        },
+      );
+    } finally {
+      if (timer) clearTimeout(timer);
+      req.off("close", onClose);
+    }
   }
 
   private handleSseOpen(_req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -213,7 +275,7 @@ export class HttpServer {
       return;
     }
     const body = await this.readBody(req);
-    const result = await this.handler.handle(body, session.protocolVersion);
+    const result = await this.runWithBudget(req, body, session.protocolVersion);
     // Acknowledge the POST quickly; SSE stream carries the response.
     res.writeHead(202).end();
     if (result === null) return;

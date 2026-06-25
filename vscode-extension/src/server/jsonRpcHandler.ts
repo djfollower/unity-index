@@ -29,6 +29,7 @@ export class JsonRpcHandler {
   async handle(
     body: string,
     protocolVersion: string = MCP_PROTOCOL_VERSION_STREAMABLE,
+    signal?: AbortSignal,
   ): Promise<JsonRpcResponse | JsonRpcResponse[] | null> {
     let parsed: unknown;
     try {
@@ -44,18 +45,19 @@ export class JsonRpcHandler {
     if (Array.isArray(parsed)) {
       const responses: JsonRpcResponse[] = [];
       for (const item of parsed) {
-        const r = await this.handleSingle(item as JsonRpcRequest, protocolVersion);
+        const r = await this.handleSingle(item as JsonRpcRequest, protocolVersion, signal);
         if (r) responses.push(r);
       }
       return responses.length > 0 ? responses : null;
     }
 
-    return this.handleSingle(parsed as JsonRpcRequest, protocolVersion);
+    return this.handleSingle(parsed as JsonRpcRequest, protocolVersion, signal);
   }
 
   private async handleSingle(
     request: JsonRpcRequest,
     protocolVersion: string,
+    signal?: AbortSignal,
   ): Promise<JsonRpcResponse | null> {
     if (!request || request.jsonrpc !== "2.0") {
       return jsonError(
@@ -74,7 +76,7 @@ export class JsonRpcHandler {
         case JSON_RPC_METHODS.TOOLS_LIST:
           return this.toolsList(request);
         case JSON_RPC_METHODS.TOOLS_CALL:
-          return await this.toolsCall(request);
+          return await this.toolsCall(request, signal);
         case JSON_RPC_METHODS.PING:
           return jsonResponse(request.id, {});
         default:
@@ -116,7 +118,10 @@ export class JsonRpcHandler {
     return jsonResponse(request.id, { tools: this.registry.getDefinitions() });
   }
 
-  private async toolsCall(request: JsonRpcRequest): Promise<JsonRpcResponse> {
+  private async toolsCall(
+    request: JsonRpcRequest,
+    signal?: AbortSignal,
+  ): Promise<JsonRpcResponse> {
     const params = request.params;
     if (!params) {
       return jsonError(
@@ -154,10 +159,11 @@ export class JsonRpcHandler {
       return jsonResponse(request.id, resolved.errorResult);
     }
 
+    const ctx = signal ? { ...this.toolCtx, signal } : this.toolCtx;
     const result: ToolCallResult = await tool.execute(
       resolved.project!,
       args,
-      this.toolCtx,
+      ctx,
     );
     return jsonResponse(request.id, result);
   }

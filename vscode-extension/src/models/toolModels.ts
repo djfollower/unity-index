@@ -100,6 +100,15 @@ export interface IndexStatusResult {
   isDumbMode: boolean;
   isIndexing: boolean;
   indexingProgress: number | null;
+  unityAssets?: UnityAssetIndexStatus;
+}
+
+export interface UnityAssetIndexStatus {
+  state: "idle" | "building" | "ready";
+  assetCount: number | null;
+  metaCount: number | null;
+  buildMs: number | null;
+  lastInvalidatedAt: number | null;
 }
 
 export interface SyncFilesResult {

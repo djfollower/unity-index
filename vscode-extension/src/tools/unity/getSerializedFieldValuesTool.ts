@@ -1,13 +1,13 @@
-import { AbstractMcpTool } from "../abstractTool";
+import { AbstractMcpTool, ToolContext } from "../abstractTool";
 import { TOOL_NAMES } from "../../constants";
 import { ToolCallResult } from "../../models/jsonRpc";
 import { ProjectContext } from "../../server/projectResolver";
 import { Args, requireString } from "../../utils/args";
 import { SchemaBuilder } from "../../utils/schema";
-import { UnityAssetIndex } from "../../utils/unityAssetIndex";
 
 export class GetSerializedFieldValuesTool extends AbstractMcpTool {
   protected readonly requiresLsp = false;
+  readonly isHeavyScan = true;
 
   readonly name = TOOL_NAMES.GET_SERIALIZED_FIELD_VALUES;
   readonly description =
@@ -22,11 +22,16 @@ export class GetSerializedFieldValuesTool extends AbstractMcpTool {
   protected async doExecute(
     project: ProjectContext,
     args: Args,
+    ctx: ToolContext,
   ): Promise<ToolCallResult> {
     const typeName = requireString(args, "typeName");
     const fieldName = requireString(args, "fieldName");
-    const index = new UnityAssetIndex(project);
-    const result = index.findSerializedFieldValues(typeName, fieldName);
+    const index = await ctx.assetIndex.get(project);
+    const result = await index.findSerializedFieldValues(
+      typeName,
+      fieldName,
+      ctx.signal,
+    );
     if (result.scriptGuid === null) {
       return this.error(
         `No .cs script file found matching type name '${typeName}'. ` +

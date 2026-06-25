@@ -1,8 +1,9 @@
+import * as path from "path";
 import * as vscode from "vscode";
-import { AbstractMcpTool } from "../abstractTool";
+import { AbstractMcpTool, ToolContext } from "../abstractTool";
 import { TOOL_NAMES, PARAM_NAMES } from "../../constants";
 import { ToolCallResult } from "../../models/jsonRpc";
-import { ProjectContext, toRelativeUri } from "../../server/projectResolver";
+import { ProjectContext, toRelativePath, toRelativeUri } from "../../server/projectResolver";
 import {
   Args,
   optionalBoolean,
@@ -12,6 +13,7 @@ import {
 } from "../../utils/args";
 import { SchemaBuilder } from "../../utils/schema";
 import { SearchTextResult, TextMatch } from "../../models/toolModels";
+import { findRipgrep, runRipgrep } from "../../utils/ripgrep";
 
 const DEFAULT_LIMIT = 200;
 const EXCLUDE_GLOB = "**/{node_modules,Library,Temp,obj,bin,.git}/**";
@@ -35,6 +37,7 @@ export class SearchTextTool extends AbstractMcpTool {
   protected async doExecute(
     project: ProjectContext,
     args: Args,
+    ctx: ToolContext,
   ): Promise<ToolCallResult> {
     const query = requireString(args, PARAM_NAMES.QUERY);
     const isRegex = optionalBoolean(args, PARAM_NAMES.REGEX) ?? false;
@@ -42,8 +45,73 @@ export class SearchTextTool extends AbstractMcpTool {
     const filePattern = optionalString(args, PARAM_NAMES.FILE_PATTERN);
     const limit = optionalInt(args, PARAM_NAMES.LIMIT) ?? DEFAULT_LIMIT;
 
+    const rg = findRipgrep();
+    const matches: TextMatch[] = rg
+      ? await this.runRipgrep(project, rg, query, isRegex, caseSensitive, filePattern, limit, ctx)
+      : await this.runVscodeFallback(project, query, isRegex, caseSensitive, filePattern, limit);
+
+    const result: SearchTextResult = {
+      matches,
+      totalCount: matches.length,
+      query,
+      hint: computeEmptyResultHint(filePattern, matches.length) ?? undefined,
+    };
+    return this.json(result);
+  }
+
+  private async runRipgrep(
+    project: ProjectContext,
+    rgPath: string,
+    pattern: string,
+    isRegex: boolean,
+    caseSensitive: boolean,
+    filePattern: string | undefined,
+    limit: number,
+    ctx: ToolContext,
+  ): Promise<TextMatch[]> {
+    try {
+      const hits = await runRipgrep({
+        rgPath,
+        cwd: project.rootPath,
+        pattern,
+        isRegex,
+        caseSensitive,
+        filePattern,
+        limit,
+        signal: ctx.signal,
+      });
+      return hits.map((h) => ({
+        file: toRelativePath(project, path.resolve(project.rootPath, h.file)),
+        line: h.line,
+        column: h.column,
+        context: h.text.trim(),
+        contextType: "CODE",
+      }));
+    } catch (e) {
+      ctx.log(
+        `ripgrep failed (${e instanceof Error ? e.message : String(e)}); falling back to VS Code search`,
+      );
+      return this.runVscodeFallback(
+        project,
+        pattern,
+        isRegex,
+        caseSensitive,
+        filePattern,
+        limit,
+      );
+    }
+  }
+
+  private async runVscodeFallback(
+    project: ProjectContext,
+    query: string,
+    isRegex: boolean,
+    caseSensitive: boolean,
+    filePattern: string | undefined,
+    limit: number,
+  ): Promise<TextMatch[]> {
     const re = buildRegex(query, isRegex, caseSensitive);
-    if (!re) return this.error("Invalid regex");
+    if (!re) throw new Error("Invalid regex");
 
     const include = new vscode.RelativePattern(
       project.rootUri,
@@ -74,14 +142,7 @@ export class SearchTextTool extends AbstractMcpTool {
         });
       }
     }
-
-    const result: SearchTextResult = {
-      matches,
-      totalCount: matches.length,
-      query,
-      hint: computeEmptyResultHint(filePattern, matches.length) ?? undefined,
-    };
-    return this.json(result);
+    return matches;
   }
 }
 

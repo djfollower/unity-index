@@ -19,6 +19,7 @@ import com.github.dungphan.unityindex.tools.unity.GetAssemblyMapTool
 import com.github.dungphan.unityindex.tools.unity.GetComponentUsageTool
 import com.github.dungphan.unityindex.tools.unity.FindGetComponentPatternsTool
 import com.github.dungphan.unityindex.tools.unity.GetApiUsageTool
+import com.github.dungphan.unityindex.tools.unity.FindAssetReferencesTool
 import com.github.dungphan.unityindex.tools.unity.GetProjectContextTool
 import com.github.dungphan.unityindex.tools.unity.GetSerializedFieldValuesTool
 import com.github.dungphan.unityindex.tools.unity.GetUnityEventBindingsTool
@@ -123,6 +124,7 @@ class ToolRegistry {
         register(GetSerializedFieldValuesTool())
         register(GetProjectContextTool())
         register(GetApiUsageTool())
+        register(FindAssetReferencesTool())
 
         LOG.info("Registered Unity-specific tools")
     }

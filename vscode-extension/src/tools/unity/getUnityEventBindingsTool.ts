@@ -1,13 +1,13 @@
-import { AbstractMcpTool } from "../abstractTool";
+import { AbstractMcpTool, ToolContext } from "../abstractTool";
 import { TOOL_NAMES } from "../../constants";
 import { ToolCallResult } from "../../models/jsonRpc";
 import { ProjectContext } from "../../server/projectResolver";
 import { Args, requireString } from "../../utils/args";
 import { SchemaBuilder } from "../../utils/schema";
-import { UnityAssetIndex } from "../../utils/unityAssetIndex";
 
 export class GetUnityEventBindingsTool extends AbstractMcpTool {
   protected readonly requiresLsp = false;
+  readonly isHeavyScan = true;
 
   readonly name = TOOL_NAMES.GET_UNITY_EVENT_BINDINGS;
   readonly description =
@@ -21,9 +21,10 @@ export class GetUnityEventBindingsTool extends AbstractMcpTool {
   protected async doExecute(
     project: ProjectContext,
     args: Args,
+    ctx: ToolContext,
   ): Promise<ToolCallResult> {
     const methodName = requireString(args, "methodName");
-    const index = new UnityAssetIndex(project);
-    return this.json(index.findEventBindings(methodName));
+    const index = await ctx.assetIndex.get(project);
+    return this.json(await index.findEventBindings(methodName, ctx.signal));
   }
 }

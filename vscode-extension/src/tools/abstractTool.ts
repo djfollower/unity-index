@@ -3,18 +3,24 @@ import { ToolCallResult } from "../models/jsonRpc";
 import { ProjectContext } from "../server/projectResolver";
 import { Args } from "../utils/args";
 import { ReadinessGate } from "../server/readinessGate";
+import { UnityAssetIndexManager } from "../utils/unityAssetIndexManager";
 
 export interface ToolContext {
   readiness: ReadinessGate;
   /** Max time to wait for LSP readiness before tools that need it give up. */
   readinessTimeoutMs: number;
   log: (msg: string) => void;
+  assetIndex: UnityAssetIndexManager;
+  /** Aborts in-flight scans when the HTTP request is dropped or watchdog fires. */
+  signal?: AbortSignal;
 }
 
 export interface McpTool {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
+  /** Tools that walk the whole project (YAML scans, GUID search). BatchTool runs these on a serialized lane so they can't starve LSP entries. */
+  readonly isHeavyScan?: boolean;
   execute(
     project: ProjectContext,
     args: Args,

@@ -18,7 +18,7 @@ export class GetIndexStatusTool extends AbstractMcpTool {
   readonly inputSchema = SchemaBuilder.tool().projectPath().build();
 
   protected async doExecute(
-    _project: ProjectContext,
+    project: ProjectContext,
     _args: Args,
     ctx: ToolContext,
   ): Promise<ToolCallResult> {
@@ -27,6 +27,7 @@ export class GetIndexStatusTool extends AbstractMcpTool {
       isDumbMode: !ready,
       isIndexing: !ready,
       indexingProgress: null,
+      unityAssets: ctx.assetIndex.status(project),
     };
     return this.json(result);
   }

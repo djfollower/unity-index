@@ -30,4 +30,5 @@ object ToolNames {
     const val GET_SERIALIZED_FIELD_VALUES = "unity_get_serialized_field_values"
     const val GET_PROJECT_CONTEXT = "unity_get_project_context"
     const val GET_API_USAGE = "unity_get_api_usage"
+    const val FIND_ASSET_REFERENCES = "unity_find_asset_references"
 }

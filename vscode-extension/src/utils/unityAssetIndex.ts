@@ -1,11 +1,15 @@
 import * as fs from "fs";
+import * as fsp from "fs/promises";
 import * as path from "path";
 import { ProjectContext, toRelativePath } from "../server/projectResolver";
 import { parseUnityYaml, UnityYamlDocument } from "./unityYaml";
 
-const ASSET_EXTENSIONS = new Set([".prefab", ".unity", ".asset"]);
+const ASSET_EXTENSIONS = new Set([".prefab", ".unity", ".asset", ".mat", ".anim", ".controller", ".playable", ".spriteatlas", ".lighting"]);
 const SKIP_DIRS = new Set(["Library", "Temp", "Logs", "obj", "bin", "node_modules", ".git"]);
 const GUID_REGEX = /^guid:\s*([0-9a-fA-F]{32})\s*$/m;
+
+const YIELD_EVERY = 200;
+const yieldEventLoop = () => new Promise<void>((r) => setImmediate(r));
 
 export interface ComponentUsage {
   assetFile: string;
@@ -51,31 +55,111 @@ export interface SerializedFieldResult {
   totalCount: number;
 }
 
-export class UnityAssetIndex {
-  private guidToPath: Map<string, string> = new Map();
-  private pathToGuid: Map<string, string> = new Map();
+export interface AssetReference {
+  assetFile: string;
+  line: number;
+  column: number;
+  /** The nearest enclosing YAML key (e.g. "m_Sprite", "m_Material"). Best-effort. */
+  fieldHint: string | null;
+  /** Parsed from `fileID: N` on the same line, when present. */
+  fileID: number | null;
+  /** The trimmed line text for context. */
+  context: string;
+}
 
-  constructor(private readonly project: ProjectContext) {
-    this.scanMetaFiles(project.rootPath);
+export interface AssetReferenceResult {
+  asset: { path: string | null; guid: string };
+  references: AssetReference[];
+  totalCount: number;
+  truncated: boolean;
+}
+
+/**
+ * Snapshot of the GUID map + asset-file list for a Unity project.
+ *
+ * Build it once via `UnityAssetIndex.build(project)` — the meta walk and
+ * asset-file enumeration are the expensive parts and they are cached on the
+ * instance. Per-query methods then iterate the cached asset-file list and
+ * read each file lazily (async) so the event loop stays responsive on big
+ * projects.
+ *
+ * Invalidation is the caller's responsibility — see `UnityAssetIndexManager`.
+ */
+export class UnityAssetIndex {
+  private constructor(
+    private readonly project: ProjectContext,
+    private readonly guidToPath: Map<string, string>,
+    private readonly pathToGuid: Map<string, string>,
+    private readonly assetFiles: string[],
+  ) {}
+
+  static async build(
+    project: ProjectContext,
+    signal?: AbortSignal,
+  ): Promise<UnityAssetIndex> {
+    const guidToPath = new Map<string, string>();
+    const pathToGuid = new Map<string, string>();
+    const assetFiles: string[] = [];
+
+    let counter = 0;
+    const tick = async () => {
+      if (++counter % YIELD_EVERY === 0) {
+        await yieldEventLoop();
+        if (signal?.aborted) throw new Error("UnityAssetIndex build aborted");
+      }
+    };
+
+    await walkAsync(project.rootPath, async (entry, isDir) => {
+      await tick();
+      if (isDir) return !SKIP_DIRS.has(path.basename(entry));
+
+      if (entry.endsWith(".meta")) {
+        await readMetaHeader(entry, guidToPath, pathToGuid);
+      } else if (ASSET_EXTENSIONS.has(path.extname(entry))) {
+        assetFiles.push(entry);
+      }
+      return true;
+    });
+
+    return new UnityAssetIndex(project, guidToPath, pathToGuid, assetFiles);
   }
 
-  findComponentUsages(typeName: string): ComponentUsageResult {
+  get assetCount(): number {
+    return this.assetFiles.length;
+  }
+
+  get metaCount(): number {
+    return this.guidToPath.size;
+  }
+
+  guidFor(assetPath: string): string | undefined {
+    return this.pathToGuid.get(assetPath);
+  }
+
+  pathFor(guid: string): string | undefined {
+    return this.guidToPath.get(guid);
+  }
+
+  async findComponentUsages(
+    typeName: string,
+    signal?: AbortSignal,
+  ): Promise<ComponentUsageResult> {
     const scriptGuid = this.findScriptGuid(typeName);
     if (!scriptGuid) {
       return { typeName, scriptGuid: null, usages: [], totalCount: 0 };
     }
 
     const usages: ComponentUsage[] = [];
-    this.forEachAssetFile((file) => {
-      const docs = this.parseAsset(file);
-      const gameObjects = new Map<number, UnityYamlDocument>();
-      for (const d of docs) if (d.classId === 1) gameObjects.set(d.fileId, d);
-
+    await this.scanAssets(scriptGuid, signal, (file, docs) => {
+      const gameObjects = collectGameObjects(docs);
       for (const doc of docs) {
         if (doc.classId !== 114) continue;
         if (doc.getScriptGuid() !== scriptGuid) continue;
         const goFileId = doc.getGameObjectFileId();
-        const goName = goFileId !== null ? gameObjects.get(goFileId)?.getProperty("m_Name") ?? null : null;
+        const goName =
+          goFileId !== null
+            ? gameObjects.get(goFileId)?.getProperty("m_Name") ?? null
+            : null;
         usages.push({
           assetFile: toRelativePath(this.project, file),
           gameObjectName: goName,
@@ -88,23 +172,27 @@ export class UnityAssetIndex {
     return { typeName, scriptGuid, usages, totalCount: usages.length };
   }
 
-  findEventBindings(methodName: string): EventBindingResult {
+  async findEventBindings(
+    methodName: string,
+    signal?: AbortSignal,
+  ): Promise<EventBindingResult> {
     const bindings: EventBinding[] = [];
-    this.forEachAssetFile((file) => {
-      const docs = this.parseAsset(file);
-      const gameObjects = new Map<number, UnityYamlDocument>();
-      for (const d of docs) if (d.classId === 1) gameObjects.set(d.fileId, d);
-
+    await this.scanAssets(methodName, signal, (file, docs) => {
+      const gameObjects = collectGameObjects(docs);
       for (const doc of docs) {
         if (doc.classId !== 114) continue;
         for (const call of doc.getPersistentCalls()) {
           if (call.methodName !== methodName) continue;
           const goFileId = doc.getGameObjectFileId();
-          const goName = goFileId !== null ? gameObjects.get(goFileId)?.getProperty("m_Name") ?? null : null;
+          const goName =
+            goFileId !== null
+              ? gameObjects.get(goFileId)?.getProperty("m_Name") ?? null
+              : null;
           bindings.push({
             assetFile: toRelativePath(this.project, file),
             eventFieldPath: findEventFieldName(doc, methodName) ?? "unknown",
-            targetTypeName: call.targetAssemblyTypeName?.split(",")[0].trim() ?? null,
+            targetTypeName:
+              call.targetAssemblyTypeName?.split(",")[0].trim() ?? null,
             methodName: call.methodName,
             gameObjectName: goName,
             callState: call.callState,
@@ -115,28 +203,36 @@ export class UnityAssetIndex {
     return { methodName, bindings, totalCount: bindings.length };
   }
 
-  findSerializedFieldValues(
+  async findSerializedFieldValues(
     typeName: string,
     fieldName: string,
-  ): SerializedFieldResult {
+    signal?: AbortSignal,
+  ): Promise<SerializedFieldResult> {
     const scriptGuid = this.findScriptGuid(typeName);
     if (!scriptGuid) {
-      return { typeName, fieldName, scriptGuid: null, values: [], totalCount: 0 };
+      return {
+        typeName,
+        fieldName,
+        scriptGuid: null,
+        values: [],
+        totalCount: 0,
+      };
     }
 
+    // Pre-filter on both needles — script GUID and field name must appear.
     const values: SerializedFieldValue[] = [];
-    this.forEachAssetFile((file) => {
-      const docs = this.parseAsset(file);
-      const gameObjects = new Map<number, UnityYamlDocument>();
-      for (const d of docs) if (d.classId === 1) gameObjects.set(d.fileId, d);
-
+    await this.scanAssets([scriptGuid, fieldName], signal, (file, docs) => {
+      const gameObjects = collectGameObjects(docs);
       for (const doc of docs) {
         if (doc.classId !== 114) continue;
         if (doc.getScriptGuid() !== scriptGuid) continue;
         const v = doc.getSerializedFieldValue(fieldName);
         if (v === undefined) continue;
         const goFileId = doc.getGameObjectFileId();
-        const goName = goFileId !== null ? gameObjects.get(goFileId)?.getProperty("m_Name") ?? null : null;
+        const goName =
+          goFileId !== null
+            ? gameObjects.get(goFileId)?.getProperty("m_Name") ?? null
+            : null;
         values.push({
           assetFile: toRelativePath(this.project, file),
           gameObjectName: goName,
@@ -147,6 +243,103 @@ export class UnityAssetIndex {
     });
 
     return { typeName, fieldName, scriptGuid, values, totalCount: values.length };
+  }
+
+  /**
+   * Find every place a GUID appears across asset YAML, with light context
+   * extraction (enclosing field name + fileID on the same line). This is the
+   * "paste the GUID into Find in Files" workflow, but cached and pre-filtered:
+   * the substring check skips ~all assets cheaply, and YAML is never fully
+   * parsed.
+   *
+   * Skips the asset's own .meta if the GUID resolves to a known asset.
+   */
+  async findAssetReferences(
+    guid: string,
+    maxResults: number,
+    signal?: AbortSignal,
+  ): Promise<AssetReferenceResult> {
+    const ownPath = this.guidToPath.get(guid) ?? null;
+    const references: AssetReference[] = [];
+    let truncated = false;
+    let counter = 0;
+
+    for (const file of this.assetFiles) {
+      if (++counter % YIELD_EVERY === 0) {
+        await yieldEventLoop();
+        if (signal?.aborted) break;
+      }
+      if (ownPath && file === ownPath) continue;
+      const content = await safeReadFile(file);
+      if (content === null) continue;
+      if (!content.includes(guid)) continue;
+
+      const lines = content.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const idx = line.indexOf(guid);
+        if (idx < 0) continue;
+        references.push({
+          assetFile: toRelativePath(this.project, file),
+          line: i + 1,
+          column: idx + 1,
+          fieldHint: enclosingKey(lines, i),
+          fileID: parseFileIDOnLine(line),
+          context: line.trim(),
+        });
+        if (references.length >= maxResults) {
+          truncated = true;
+          break;
+        }
+      }
+      if (truncated) break;
+    }
+
+    return {
+      asset: {
+        path: ownPath ? toRelativePath(this.project, ownPath) : null,
+        guid,
+      },
+      references,
+      totalCount: references.length,
+      truncated,
+    };
+  }
+
+  /**
+   * Iterate every asset file once, applying a substring fast-path on each
+   * needle before parsing the YAML. The visitor only runs for files where
+   * every needle hits.
+   */
+  private async scanAssets(
+    needles: string | string[],
+    signal: AbortSignal | undefined,
+    visit: (file: string, docs: UnityYamlDocument[]) => void,
+  ): Promise<void> {
+    const needleList = Array.isArray(needles) ? needles : [needles];
+    let counter = 0;
+    for (const file of this.assetFiles) {
+      if (++counter % YIELD_EVERY === 0) {
+        await yieldEventLoop();
+        if (signal?.aborted) return;
+      }
+      const content = await safeReadFile(file);
+      if (content === null) continue;
+      let skip = false;
+      for (const n of needleList) {
+        if (!content.includes(n)) {
+          skip = true;
+          break;
+        }
+      }
+      if (skip) continue;
+      try {
+        const docs = parseUnityYaml(content, file);
+        visit(file, docs);
+      } catch {
+        /* keep scanning */
+      }
+    }
   }
 
   private findScriptGuid(typeName: string): string | null {
@@ -162,77 +355,94 @@ export class UnityAssetIndex {
     }
     return null;
   }
+}
 
-  private parseAsset(filePath: string): UnityYamlDocument[] {
-    try {
-      const content = fs.readFileSync(filePath, "utf-8");
-      return parseUnityYaml(content, filePath);
-    } catch {
-      return [];
-    }
-  }
-
-  private forEachAssetFile(action: (absolutePath: string) => void): void {
-    walk(this.project.rootPath, (entry, isDir) => {
-      if (isDir) return !SKIP_DIRS.has(path.basename(entry));
-      if (ASSET_EXTENSIONS.has(path.extname(entry))) {
-        try {
-          action(entry);
-        } catch {
-          /* keep scanning */
-        }
-      }
-      return true;
-    });
-  }
-
-  private scanMetaFiles(root: string): void {
-    walk(root, (entry, isDir) => {
-      if (isDir) return !SKIP_DIRS.has(path.basename(entry));
-      if (!entry.endsWith(".meta")) return true;
-      try {
-        const fd = fs.openSync(entry, "r");
-        const buf = Buffer.alloc(512);
-        const n = fs.readSync(fd, buf, 0, 512, 0);
-        fs.closeSync(fd);
-        const header = buf.toString("utf-8", 0, n);
-        const m = GUID_REGEX.exec(header);
-        if (!m) return true;
-        const assetPath = entry.slice(0, -5);
-        this.guidToPath.set(m[1], assetPath);
-        this.pathToGuid.set(assetPath, m[1]);
-      } catch {
-        /* ignore */
-      }
-      return true;
-    });
+async function readMetaHeader(
+  metaPath: string,
+  guidToPath: Map<string, string>,
+  pathToGuid: Map<string, string>,
+): Promise<void> {
+  let fh: fsp.FileHandle | undefined;
+  try {
+    fh = await fsp.open(metaPath, "r");
+    const buf = Buffer.alloc(512);
+    const { bytesRead } = await fh.read(buf, 0, 512, 0);
+    const header = buf.toString("utf-8", 0, bytesRead);
+    const m = GUID_REGEX.exec(header);
+    if (!m) return;
+    const assetPath = metaPath.slice(0, -5);
+    guidToPath.set(m[1], assetPath);
+    pathToGuid.set(assetPath, m[1]);
+  } catch {
+    /* ignore */
+  } finally {
+    await fh?.close().catch(() => undefined);
   }
 }
 
-function walk(
-  root: string,
-  visit: (path: string, isDir: boolean) => boolean,
-): void {
-  let entries: string[];
+async function safeReadFile(file: string): Promise<string | null> {
   try {
-    entries = fs.readdirSync(root);
+    return await fsp.readFile(file, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+async function walkAsync(
+  root: string,
+  visit: (entry: string, isDir: boolean) => Promise<boolean>,
+): Promise<void> {
+  let entries: fs.Dirent[];
+  try {
+    entries = await fsp.readdir(root, { withFileTypes: true });
   } catch {
     return;
   }
-  for (const name of entries) {
-    const full = path.join(root, name);
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(full);
-    } catch {
-      continue;
-    }
-    if (stat.isDirectory()) {
-      if (visit(full, true)) walk(full, visit);
-    } else {
-      visit(full, false);
+  for (const dirent of entries) {
+    const full = path.join(root, dirent.name);
+    const isDir = dirent.isDirectory();
+    const descend = await visit(full, isDir);
+    if (isDir && descend) {
+      await walkAsync(full, visit);
     }
   }
+}
+
+function collectGameObjects(
+  docs: UnityYamlDocument[],
+): Map<number, UnityYamlDocument> {
+  const out = new Map<number, UnityYamlDocument>();
+  for (const d of docs) if (d.classId === 1) out.set(d.fileId, d);
+  return out;
+}
+
+/**
+ * Walk back from `lineIdx` to find the most recent line that looks like a YAML
+ * key. Best-effort — Unity YAML is regular enough that the nearest preceding
+ * `^(\s*)(\w[\w\d_]*):\s*$` line at a strictly smaller indent than the GUID's
+ * own indent is almost always the field that owns the GUID reference.
+ */
+function enclosingKey(lines: string[], lineIdx: number): string | null {
+  const guidLine = lines[lineIdx];
+  const guidIndent = guidLine.length - guidLine.trimStart().length;
+  const keyRe = /^(\s*)([A-Za-z_][\w]*):\s*(.*)$/;
+  for (let i = lineIdx - 1; i >= 0 && i >= lineIdx - 200; i--) {
+    const m = keyRe.exec(lines[i]);
+    if (!m) continue;
+    const indent = m[1].length;
+    if (indent >= guidIndent) continue;
+    // Skip `m_Script: …` lines: those are the script type, not the field.
+    if (m[2] === "m_Script" && m[3].length > 0) continue;
+    return m[2];
+  }
+  return null;
+}
+
+function parseFileIDOnLine(line: string): number | null {
+  const m = /fileID:\s*(-?\d+)/.exec(line);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) ? n : null;
 }
 
 function findEventFieldName(

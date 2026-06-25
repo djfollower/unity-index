@@ -58,6 +58,32 @@ data class SerializedFieldValue(
     val fileId: Long
 )
 
+@Serializable
+data class AssetReferenceResult(
+    val asset: AssetReferenceTarget,
+    val references: List<AssetReference>,
+    val totalCount: Int,
+    val truncated: Boolean
+)
+
+@Serializable
+data class AssetReferenceTarget(
+    val path: String?,
+    val guid: String
+)
+
+@Serializable
+data class AssetReference(
+    val assetFile: String,
+    val line: Int,
+    val column: Int,
+    /** Best-effort enclosing YAML key (e.g. "m_Sprite"). */
+    val fieldHint: String?,
+    /** Parsed from `fileID: N` on the same line, when present. */
+    val fileID: Long?,
+    val context: String
+)
+
 class UnityAssetIndex private constructor(
     private val guidResolver: UnityGuidResolver,
     private val projectDir: VirtualFile,
@@ -181,6 +207,82 @@ class UnityAssetIndex private constructor(
     }
 
     fun getGuidResolver(): UnityGuidResolver = guidResolver
+
+    /**
+     * Mirror of the TS UnityAssetIndex.findAssetReferences. Iterates asset
+     * files, applies a substring fast-path on the GUID, and pulls light
+     * context (enclosing field key + fileID on the same line) without a full
+     * YAML parse. Use for "which assets reference X" questions; the GUID is
+     * unique so false positives are essentially zero.
+     */
+    fun findAssetReferences(guid: String, maxResults: Int): AssetReferenceResult {
+        val ownPath = guidResolver.getPathForGuid(guid)
+        val references = mutableListOf<AssetReference>()
+        var truncated = false
+
+        forEachAssetFile { file ->
+            if (truncated) return@forEachAssetFile
+            if (ownPath != null && file.path == ownPath) return@forEachAssetFile
+            val content = try {
+                String(file.contentsToByteArray(), Charsets.UTF_8)
+            } catch (_: Exception) {
+                return@forEachAssetFile
+            }
+            if (!content.contains(guid)) return@forEachAssetFile
+
+            val lines = content.split('\n')
+            for ((i, raw) in lines.withIndex()) {
+                val line = raw.trimEnd('\r')
+                val col = line.indexOf(guid)
+                if (col < 0) continue
+                references.add(
+                    AssetReference(
+                        assetFile = relativePath(file.path),
+                        line = i + 1,
+                        column = col + 1,
+                        fieldHint = enclosingKey(lines, i),
+                        fileID = parseFileIDOnLine(line),
+                        context = line.trim()
+                    )
+                )
+                if (references.size >= maxResults) {
+                    truncated = true
+                    break
+                }
+            }
+        }
+
+        return AssetReferenceResult(
+            asset = AssetReferenceTarget(
+                path = ownPath?.let { relativePath(it) },
+                guid = guid
+            ),
+            references = references,
+            totalCount = references.size,
+            truncated = truncated
+        )
+    }
+
+    private fun enclosingKey(lines: List<String>, lineIdx: Int): String? {
+        val guidLine = lines[lineIdx]
+        val guidIndent = guidLine.length - guidLine.trimStart().length
+        val keyRe = Regex("""^(\s*)([A-Za-z_]\w*):\s*(.*)$""")
+        val start = lineIdx - 1
+        val end = maxOf(0, lineIdx - 200)
+        for (i in start downTo end) {
+            val m = keyRe.matchEntire(lines[i].trimEnd('\r')) ?: continue
+            val indent = m.groupValues[1].length
+            if (indent >= guidIndent) continue
+            if (m.groupValues[2] == "m_Script" && m.groupValues[3].isNotEmpty()) continue
+            return m.groupValues[2]
+        }
+        return null
+    }
+
+    private fun parseFileIDOnLine(line: String): Long? {
+        val m = Regex("""fileID:\s*(-?\d+)""").find(line) ?: return null
+        return m.groupValues[1].toLongOrNull()
+    }
 
     private fun findScriptGuid(typeName: String): String? {
         val allScripts = guidResolver.getAllScriptGuids()
