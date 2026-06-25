@@ -13,7 +13,8 @@ export class FindReferencesTool extends AbstractMcpTool {
   readonly description =
     "Find all references to a symbol across the project. Use when you need to know where a method, class, field, or variable is used. " +
     "Returns file/line/column locations with context snippets. " +
-    "Target: file + line + column (position-based lookup). Example: {\"file\": \"Assets/Scripts/PlayerController.cs\", \"line\": 15, \"column\": 10}";
+    "Target: file + line + column (position-based lookup). Example: {\"file\": \"Assets/Scripts/PlayerController.cs\", \"line\": 15, \"column\": 10}. " +
+    "Note: if every usage looks like AddListener(X) / RegisterCallback(X) / += X (or the Remove/-= counterparts), the method is an event handler — its real call sites are wherever the event is dispatched. Find the event's declaration and run ide_find_references on it, or ide_search_text on the event name. For Unity Inspector-wired UnityEvents, use unity_get_unity_event_bindings.";
   readonly inputSchema = SchemaBuilder.tool()
     .projectPath()
     .file(true)
@@ -58,9 +59,46 @@ export class FindReferencesTool extends AbstractMcpTool {
       usages,
       totalCount: locations.length,
       truncated,
+      hint: handlerRegistrationHint(usages) ?? undefined,
     };
     return this.json(result);
   }
+}
+
+/**
+ * If most non-declaration usages look like event-handler registrations
+ * (AddListener / RegisterCallback / += / Subscribe), nudge the caller to chase
+ * the event's dispatch sites — otherwise the result looks "complete" with N
+ * direct hits and the agent stops, missing the indirect call chain.
+ *
+ * Heuristic: ≥2 non-declaration usages and ≥50% of them match a registration
+ * pattern. Conservative on purpose; we'd rather miss a hint than mislead.
+ */
+const HANDLER_PATTERNS = [
+  /\.AddListener\s*\(/,
+  /\.RemoveListener\s*\(/,
+  /\.RegisterCallback\s*\(/,
+  /\.UnregisterCallback\s*\(/,
+  /\bSubscribe\s*\(/,
+  /\bUnsubscribe\s*\(/,
+  // C# event subscription: `something += MethodName` and `-=`.
+  /[+\-]=\s*[A-Za-z_]/,
+];
+
+function handlerRegistrationHint(usages: UsageLocation[]): string | null {
+  const nonDecl = usages.filter((u) => !/DECLARATION$/.test(u.type));
+  if (nonDecl.length < 2) return null;
+  let hits = 0;
+  for (const u of nonDecl) {
+    if (HANDLER_PATTERNS.some((re) => re.test(u.context))) hits++;
+  }
+  if (hits * 2 < nonDecl.length) return null;
+  return (
+    "Every usage looks like an event-handler registration (AddListener / RegisterCallback / += / Subscribe). " +
+    "The method is invoked indirectly via the event it subscribes to — to find its real call sites, locate the event declaration " +
+    "(usually the field passed to AddListener) and run ide_find_references on that event, or ide_search_text on its name. " +
+    "For Unity Inspector-wired UnityEvents, also try unity_get_unity_event_bindings."
+  );
 }
 
 async function safeOpen(uri: vscode.Uri): Promise<vscode.TextDocument | undefined> {

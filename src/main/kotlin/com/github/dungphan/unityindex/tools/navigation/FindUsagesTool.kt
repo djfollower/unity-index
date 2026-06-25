@@ -54,6 +54,38 @@ class FindUsagesTool : AbstractMcpTool() {
         private fun isProjectMetadataFile(file: VirtualFile): Boolean =
             file.extension?.lowercase() in PROJECT_METADATA_EXTENSIONS
 
+        /**
+         * Pattern set mirrors vscode-extension/src/tools/navigation/findReferencesTool.ts.
+         * Keep in lockstep — the wire contract is the hint text, not the regex.
+         */
+        private val HANDLER_PATTERNS = listOf(
+            Regex("""\.AddListener\s*\("""),
+            Regex("""\.RemoveListener\s*\("""),
+            Regex("""\.RegisterCallback\s*\("""),
+            Regex("""\.UnregisterCallback\s*\("""),
+            Regex("""\bSubscribe\s*\("""),
+            Regex("""\bUnsubscribe\s*\("""),
+            Regex("""[+\-]=\s*[A-Za-z_]""")
+        )
+
+        /**
+         * If most non-declaration usages look like event-handler registrations,
+         * nudge the caller to chase the event's dispatch sites — otherwise the
+         * result looks "complete" with N direct hits and the agent stops,
+         * missing the indirect call chain. Conservative on purpose; we'd
+         * rather miss a hint than mislead.
+         */
+        internal fun handlerRegistrationHint(usages: List<UsageLocation>): String? {
+            val nonDecl = usages.filterNot { it.type.endsWith("DECLARATION") }
+            if (nonDecl.size < 2) return null
+            val hits = nonDecl.count { u -> HANDLER_PATTERNS.any { it.containsMatchIn(u.context) } }
+            if (hits * 2 < nonDecl.size) return null
+            return "Every usage looks like an event-handler registration (AddListener / RegisterCallback / += / Subscribe). " +
+                "The method is invoked indirectly via the event it subscribes to — to find its real call sites, locate the event declaration " +
+                "(usually the field passed to AddListener) and run ide_find_references on that event, or ide_search_text on its name. " +
+                "For Unity Inspector-wired UnityEvents, also try unity_get_unity_event_bindings."
+        }
+
         internal fun searchInfrastructureErrorMessage(error: Throwable): String {
             val detail = error.message?.takeIf { it.isNotBlank() }?.let { ": $it" } ?: ""
             return "Reference search failed due to IDE/plugin API incompatibility (${error::class.simpleName}$detail). " +
@@ -77,6 +109,8 @@ class FindUsagesTool : AbstractMcpTool() {
         Parameters: scope (optional, default: "project_files"; supported: project_files, project_and_libraries, project_production_files, project_test_files), pageSize (optional, default: 100, max: 500).
 
         Example: {"file": "Assets/Scripts/PlayerController.cs", "line": 25, "column": 18}
+
+        Note: if every usage looks like AddListener(X) / RegisterCallback(X) / += X (or the Remove/-= counterparts), the method is an event handler — its real call sites are wherever the event is dispatched. Find the event's declaration and run ide_find_references on it, or ide_search_text on the event name. For Unity Inspector-wired UnityEvents, use unity_get_unity_event_bindings.
     """.trimIndent()
 
     override val inputSchema: JsonObject = SchemaBuilder.tool()
@@ -105,7 +139,8 @@ class FindUsagesTool : AbstractMcpTool() {
                     totalCollected = page.totalCollected,
                     offset = page.offset,
                     pageSize = page.pageSize,
-                    stale = page.stale
+                    stale = page.stale,
+                    hint = handlerRegistrationHint(items)
                 )
             }
         }
@@ -260,7 +295,8 @@ class FindUsagesTool : AbstractMcpTool() {
                 totalCollected = page.totalCollected,
                 offset = page.offset,
                 pageSize = page.pageSize,
-                stale = page.stale
+                stale = page.stale,
+                hint = handlerRegistrationHint(items)
             )
         }
     }
@@ -492,7 +528,8 @@ class FindUsagesTool : AbstractMcpTool() {
             totalCollected = usages.size,
             offset = 0,
             pageSize = pageSize,
-            stale = false
+            stale = false,
+            hint = handlerRegistrationHint(displayUsages)
         ))
     }
 }

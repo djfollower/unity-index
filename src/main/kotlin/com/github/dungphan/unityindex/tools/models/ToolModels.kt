@@ -30,7 +30,9 @@ data class FindUsagesResult(
     val totalCollected: Int = 0,
     val offset: Int = 0,
     val pageSize: Int = 0,
-    val stale: Boolean = false
+    val stale: Boolean = false,
+    /** Optional caller-side guidance — present when the result shape suggests a follow-up (e.g. event-handler pattern). */
+    val hint: String? = null
 )
 
 // find_definition output

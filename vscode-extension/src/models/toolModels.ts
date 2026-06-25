@@ -13,6 +13,8 @@ export interface FindUsagesResult {
   usages: UsageLocation[];
   totalCount: number;
   truncated?: boolean;
+  /** Optional caller-side guidance — present when the result shape suggests a follow-up (e.g. event-handler pattern). */
+  hint?: string;
 }
 
 export interface DefinitionResult {
