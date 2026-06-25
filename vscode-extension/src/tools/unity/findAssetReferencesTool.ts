@@ -26,8 +26,11 @@ export class FindAssetReferencesTool extends AbstractMcpTool {
   readonly description =
     "Find every Unity asset (prefab/scene/scriptable-object/material/animator/etc.) that references a given asset by its GUID. " +
     "Pass either `assetPath` (any asset under the project) or `guid` directly. " +
-    "Returns each hit with the enclosing YAML field (e.g. m_Sprite) and the fileID when present. " +
-    "Use for questions like 'which prefabs use this sprite?', 'which scenes embed this prefab?', 'which assets bind to this ScriptableObject?'.";
+    "Returns each hit with the enclosing YAML field (e.g. m_Sprite), the fileID when present, and a `shadowed` flag. " +
+    "`shadowed=true` flags dangling references: the YAML still names a field on a MonoBehaviour script that the class no longer declares " +
+    "(e.g. a serialized sprite assigned in a prefab after the field was removed from the .cs source). `shadowed=null` means undetermined. " +
+    "Use for questions like 'which prefabs use this sprite?', 'which scenes embed this prefab?', 'which assets bind to this ScriptableObject?', " +
+    "'which prefabs still reference a field that's been deleted?'.";
   readonly inputSchema = SchemaBuilder.tool()
     .projectPath()
     .stringProperty(

@@ -1,11 +1,13 @@
 package com.github.dungphan.unityindex.util
 
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtilCore
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileVisitor
+import com.intellij.psi.PsiManager
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -81,10 +83,19 @@ data class AssetReference(
     val fieldHint: String?,
     /** Parsed from `fileID: N` on the same line, when present. */
     val fileID: Long?,
-    val context: String
+    val context: String,
+    /**
+     * `true` when the hit sits inside a MonoBehaviour doc whose script class
+     * no longer declares a serialized field named [fieldHint] — i.e. a dangling
+     * YAML reference left behind after the field was removed from the script.
+     * `null` when no determination could be made (not under a MonoBehaviour,
+     * no field hint, m_Script unresolved, or class not found in the index).
+     */
+    val shadowed: Boolean? = null
 )
 
 class UnityAssetIndex private constructor(
+    private val project: Project,
     private val guidResolver: UnityGuidResolver,
     private val projectDir: VirtualFile,
     private val basePath: String
@@ -92,12 +103,32 @@ class UnityAssetIndex private constructor(
     companion object {
         private val LOG = logger<UnityAssetIndex>()
         private val ASSET_EXTENSIONS = setOf("prefab", "unity", "asset")
+        private val MB_HEADER_REGEX = Regex("""^---\s+!u!(\d+)\s+&(\d+)""")
+        private val M_SCRIPT_GUID_REGEX = Regex("""m_Script:\s*\{[^}]*guid:\s*([0-9a-fA-F]{32})""")
+
+        /**
+         * YAML keys that live on every MonoBehaviour regardless of the user
+         * script. They never indicate a shadowed user-field, so we ignore
+         * them when classifying refs.
+         */
+        private val MONOBEHAVIOUR_BUILTIN_KEYS = setOf(
+            "m_ObjectHideFlags",
+            "m_CorrespondingSourceObject",
+            "m_PrefabInstance",
+            "m_PrefabAsset",
+            "m_GameObject",
+            "m_Enabled",
+            "m_EditorHideFlags",
+            "m_Script",
+            "m_Name",
+            "m_EditorClassIdentifier"
+        )
 
         fun create(project: Project): UnityAssetIndex? {
             val basePath = project.basePath ?: return null
             val projectDir = LocalFileSystem.getInstance().findFileByPath(basePath) ?: return null
             val guidResolver = UnityGuidResolver(projectDir)
-            return UnityAssetIndex(guidResolver, projectDir, basePath)
+            return UnityAssetIndex(project, guidResolver, projectDir, basePath)
         }
     }
 
@@ -219,6 +250,7 @@ class UnityAssetIndex private constructor(
         val ownPath = guidResolver.getPathForGuid(guid)
         val references = mutableListOf<AssetReference>()
         var truncated = false
+        val detector = ShadowedFieldDetector(project, guidResolver)
 
         forEachAssetFile { file ->
             if (truncated) return@forEachAssetFile
@@ -231,18 +263,22 @@ class UnityAssetIndex private constructor(
             if (!content.contains(guid)) return@forEachAssetFile
 
             val lines = content.split('\n')
+            val monoBehaviourRanges = collectMonoBehaviourRanges(lines)
             for ((i, raw) in lines.withIndex()) {
                 val line = raw.trimEnd('\r')
                 val col = line.indexOf(guid)
                 if (col < 0) continue
+                val fieldHint = enclosingKey(lines, i)
+                val shadowed = classifyShadowed(detector, monoBehaviourRanges, i, fieldHint)
                 references.add(
                     AssetReference(
                         assetFile = relativePath(file.path),
                         line = i + 1,
                         column = col + 1,
-                        fieldHint = enclosingKey(lines, i),
+                        fieldHint = fieldHint,
                         fileID = parseFileIDOnLine(line),
-                        context = line.trim()
+                        context = line.trim(),
+                        shadowed = shadowed
                     )
                 )
                 if (references.size >= maxResults) {
@@ -262,6 +298,62 @@ class UnityAssetIndex private constructor(
             truncated = truncated
         )
     }
+
+    /**
+     * Build line ranges for each MonoBehaviour (classId 114) document in the
+     * file, capturing each doc's m_Script GUID. Used to attribute a GUID hit
+     * to the user script whose field owns it, so we can decide if the field
+     * still exists on the class.
+     */
+    private fun collectMonoBehaviourRanges(lines: List<String>): List<MonoBehaviourRange> {
+        val ranges = mutableListOf<MonoBehaviourRange>()
+        var currentStart = -1
+        var currentIsMb = false
+        var currentScriptGuid: String? = null
+
+        fun close(endExclusive: Int) {
+            if (currentStart >= 0 && currentIsMb) {
+                ranges.add(MonoBehaviourRange(currentStart, endExclusive, currentScriptGuid))
+            }
+        }
+
+        for ((i, raw) in lines.withIndex()) {
+            val line = raw.trimEnd('\r')
+            val header = MB_HEADER_REGEX.matchEntire(line)
+            if (header != null) {
+                close(i)
+                currentStart = i
+                currentIsMb = header.groupValues[1] == "114"
+                currentScriptGuid = null
+                continue
+            }
+            if (currentIsMb && currentScriptGuid == null) {
+                val m = M_SCRIPT_GUID_REGEX.find(line)
+                if (m != null) currentScriptGuid = m.groupValues[1].lowercase()
+            }
+        }
+        close(lines.size)
+        return ranges
+    }
+
+    private fun classifyShadowed(
+        detector: ShadowedFieldDetector,
+        ranges: List<MonoBehaviourRange>,
+        lineIdx: Int,
+        fieldHint: String?
+    ): Boolean? {
+        if (fieldHint == null) return null
+        if (fieldHint in MONOBEHAVIOUR_BUILTIN_KEYS) return null
+        val range = ranges.firstOrNull { lineIdx in it.startLine until it.endLineExclusive } ?: return null
+        val scriptGuid = range.scriptGuid ?: return null
+        return detector.isShadowed(scriptGuid, fieldHint)
+    }
+
+    private data class MonoBehaviourRange(
+        val startLine: Int,
+        val endLineExclusive: Int,
+        val scriptGuid: String?
+    )
 
     private fun enclosingKey(lines: List<String>, lineIdx: Int): String? {
         val guidLine = lines[lineIdx]
@@ -329,5 +421,96 @@ class UnityAssetIndex private constructor(
 
     private fun relativePath(absolutePath: String): String {
         return absolutePath.removePrefix(basePath).removePrefix("/")
+    }
+}
+
+/**
+ * Decides whether a `<scriptGuid, fieldName>` pair corresponds to a serialized
+ * field that still exists on the script's class. Backed by the IDE Structure
+ * View, so it reflects whatever Roslyn / the C# language plugin sees — never
+ * a text scan of the .cs source.
+ *
+ * Returns:
+ * - `true` — class resolved AND `fieldName` is NOT among its serialized members.
+ * - `false` — class resolved AND `fieldName` IS among them.
+ * - `null` — class couldn't be resolved (no .meta, file gone, no structure
+ *   view, etc.). Callers should treat this as "unknown, don't flag."
+ *
+ * Per-call cache keeps the structure-view walk to one read per script.
+ */
+internal class ShadowedFieldDetector(
+    private val project: Project,
+    private val guidResolver: UnityGuidResolver
+) {
+    private val cache = mutableMapOf<String, Set<String>?>()
+
+    fun isShadowed(scriptGuid: String, fieldName: String): Boolean? {
+        val fields = fieldsFor(scriptGuid) ?: return null
+        return fieldName !in fields
+    }
+
+    private fun fieldsFor(scriptGuid: String): Set<String>? {
+        if (cache.containsKey(scriptGuid)) return cache[scriptGuid]
+        val resolved = resolve(scriptGuid)
+        cache[scriptGuid] = resolved
+        return resolved
+    }
+
+    private fun resolve(scriptGuid: String): Set<String>? {
+        val scriptPath = guidResolver.getPathForGuid(scriptGuid) ?: return null
+        if (!scriptPath.endsWith(".cs")) return null
+        val virtualFile = LocalFileSystem.getInstance().findFileByPath(scriptPath) ?: return null
+
+        return try {
+            ReadAction.compute<Set<String>?, RuntimeException> {
+                val psiFile = PsiManager.getInstance(project).findFile(virtualFile) ?: return@compute null
+                val nodes = IdeStructureViewExtractor.extract(psiFile, project, fieldClassifier())
+                val names = mutableSetOf<String>()
+                collectMemberNames(nodes, names)
+                names
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun collectMemberNames(
+        nodes: List<com.github.dungphan.unityindex.tools.models.StructureNode>,
+        out: MutableSet<String>
+    ) {
+        for (node in nodes) {
+            when (node.kind) {
+                com.github.dungphan.unityindex.tools.models.StructureKind.FIELD,
+                com.github.dungphan.unityindex.tools.models.StructureKind.PROPERTY,
+                com.github.dungphan.unityindex.tools.models.StructureKind.CONSTANT -> out.add(node.name)
+                else -> {}
+            }
+            if (node.children.isNotEmpty()) collectMemberNames(node.children, out)
+        }
+    }
+
+    /**
+     * Generic classifier — we only need the kind + name. Matches the heuristic
+     * used by [com.github.dungphan.unityindex.tools.navigation.FileStructureTool].
+     */
+    private fun fieldClassifier(): IdeStructureViewExtractor.Classifier {
+        return IdeStructureViewExtractor.Classifier { value, presentation ->
+            val rawName = presentation.presentableText ?: return@Classifier null
+            val name = rawName.substringBefore(':').substringBefore('(').trim()
+            if (name.isEmpty()) return@Classifier null
+            val className = value?.javaClass?.simpleName?.lowercase() ?: ""
+            val kind = when {
+                className.contains("field") -> com.github.dungphan.unityindex.tools.models.StructureKind.FIELD
+                className.contains("property") -> com.github.dungphan.unityindex.tools.models.StructureKind.PROPERTY
+                className.contains("constant") -> com.github.dungphan.unityindex.tools.models.StructureKind.CONSTANT
+                className.contains("method") || className.contains("function") -> com.github.dungphan.unityindex.tools.models.StructureKind.METHOD
+                className.contains("interface") -> com.github.dungphan.unityindex.tools.models.StructureKind.INTERFACE
+                className.contains("enum") -> com.github.dungphan.unityindex.tools.models.StructureKind.ENUM
+                className.contains("class") -> com.github.dungphan.unityindex.tools.models.StructureKind.CLASS
+                className.contains("namespace") -> com.github.dungphan.unityindex.tools.models.StructureKind.NAMESPACE
+                else -> com.github.dungphan.unityindex.tools.models.StructureKind.UNKNOWN
+            }
+            IdeStructureViewExtractor.StructureElementInfo(name = name, kind = kind)
+        }
     }
 }

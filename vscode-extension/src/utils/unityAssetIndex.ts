@@ -1,12 +1,34 @@
 import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
+import * as vscode from "vscode";
 import { ProjectContext, toRelativePath } from "../server/projectResolver";
+import { executeDocumentSymbols } from "./lspBridge";
 import { parseUnityYaml, UnityYamlDocument } from "./unityYaml";
 
 const ASSET_EXTENSIONS = new Set([".prefab", ".unity", ".asset", ".mat", ".anim", ".controller", ".playable", ".spriteatlas", ".lighting"]);
 const SKIP_DIRS = new Set(["Library", "Temp", "Logs", "obj", "bin", "node_modules", ".git"]);
 const GUID_REGEX = /^guid:\s*([0-9a-fA-F]{32})\s*$/m;
+const MB_HEADER_REGEX = /^---\s+!u!(\d+)\s+&(\d+)/;
+const M_SCRIPT_GUID_REGEX = /m_Script:\s*\{[^}]*guid:\s*([0-9a-fA-F]{32})/;
+
+/**
+ * YAML keys that live on every MonoBehaviour regardless of the user script —
+ * we never flag these as shadowed even if the script class doesn't declare
+ * a field by that name.
+ */
+const MONOBEHAVIOUR_BUILTIN_KEYS = new Set([
+  "m_ObjectHideFlags",
+  "m_CorrespondingSourceObject",
+  "m_PrefabInstance",
+  "m_PrefabAsset",
+  "m_GameObject",
+  "m_Enabled",
+  "m_EditorHideFlags",
+  "m_Script",
+  "m_Name",
+  "m_EditorClassIdentifier",
+]);
 
 const YIELD_EVERY = 200;
 const yieldEventLoop = () => new Promise<void>((r) => setImmediate(r));
@@ -65,6 +87,15 @@ export interface AssetReference {
   fileID: number | null;
   /** The trimmed line text for context. */
   context: string;
+  /**
+   * `true` when the hit sits inside a MonoBehaviour doc whose script class no
+   * longer declares a serialized field named `fieldHint` — i.e. a dangling
+   * YAML reference left behind after the field was removed from the script.
+   * `null` when the determination wasn't possible (not under a MonoBehaviour,
+   * no field hint, m_Script unresolved, or the script's symbols couldn't be
+   * loaded).
+   */
+  shadowed: boolean | null;
 }
 
 export interface AssetReferenceResult {
@@ -263,6 +294,7 @@ export class UnityAssetIndex {
     const references: AssetReference[] = [];
     let truncated = false;
     let counter = 0;
+    const detector = new ShadowedFieldDetector(this.guidToPath);
 
     for (const file of this.assetFiles) {
       if (++counter % YIELD_EVERY === 0) {
@@ -275,23 +307,52 @@ export class UnityAssetIndex {
       if (!content.includes(guid)) continue;
 
       const lines = content.split(/\r?\n/);
+      const ranges = collectMonoBehaviourRanges(lines);
+      const fileHits: { ref: AssetReference; scriptGuid: string | null }[] = [];
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const idx = line.indexOf(guid);
         if (idx < 0) continue;
-        references.push({
+        const fieldHint = enclosingKey(lines, i);
+        const range = findEnclosingRange(ranges, i);
+        const ref: AssetReference = {
           assetFile: toRelativePath(this.project, file),
           line: i + 1,
           column: idx + 1,
-          fieldHint: enclosingKey(lines, i),
+          fieldHint,
           fileID: parseFileIDOnLine(line),
           context: line.trim(),
-        });
+          shadowed: null,
+        };
+        fileHits.push({ ref, scriptGuid: range?.scriptGuid ?? null });
+        references.push(ref);
         if (references.length >= maxResults) {
           truncated = true;
           break;
         }
       }
+
+      // Resolve shadowed flag for hits inside MonoBehaviour docs in this file.
+      const scriptGuids = new Set<string>();
+      for (const { ref, scriptGuid } of fileHits) {
+        if (
+          scriptGuid &&
+          ref.fieldHint &&
+          !MONOBEHAVIOUR_BUILTIN_KEYS.has(ref.fieldHint)
+        ) {
+          scriptGuids.add(scriptGuid);
+        }
+      }
+      for (const sg of scriptGuids) {
+        await detector.prefetch(sg);
+        if (signal?.aborted) break;
+      }
+      for (const { ref, scriptGuid } of fileHits) {
+        if (!scriptGuid || !ref.fieldHint) continue;
+        if (MONOBEHAVIOUR_BUILTIN_KEYS.has(ref.fieldHint)) continue;
+        ref.shadowed = detector.isShadowed(scriptGuid, ref.fieldHint);
+      }
+
       if (truncated) break;
     }
 
@@ -436,6 +497,135 @@ function enclosingKey(lines: string[], lineIdx: number): string | null {
     return m[2];
   }
   return null;
+}
+
+interface MonoBehaviourRange {
+  startLine: number;
+  endLineExclusive: number;
+  scriptGuid: string | null;
+}
+
+/**
+ * Build line ranges for each MonoBehaviour (classId 114) document in the
+ * file, capturing each doc's m_Script GUID. Used to attribute a GUID hit to
+ * the user script whose field owns it.
+ */
+function collectMonoBehaviourRanges(lines: string[]): MonoBehaviourRange[] {
+  const ranges: MonoBehaviourRange[] = [];
+  let currentStart = -1;
+  let currentIsMb = false;
+  let currentScriptGuid: string | null = null;
+
+  const close = (endExclusive: number) => {
+    if (currentStart >= 0 && currentIsMb) {
+      ranges.push({
+        startLine: currentStart,
+        endLineExclusive: endExclusive,
+        scriptGuid: currentScriptGuid,
+      });
+    }
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const header = MB_HEADER_REGEX.exec(lines[i]);
+    if (header) {
+      close(i);
+      currentStart = i;
+      currentIsMb = header[1] === "114";
+      currentScriptGuid = null;
+      continue;
+    }
+    if (currentIsMb && currentScriptGuid === null) {
+      const m = M_SCRIPT_GUID_REGEX.exec(lines[i]);
+      if (m) currentScriptGuid = m[1].toLowerCase();
+    }
+  }
+  close(lines.length);
+  return ranges;
+}
+
+function findEnclosingRange(
+  ranges: MonoBehaviourRange[],
+  lineIdx: number,
+): MonoBehaviourRange | null {
+  for (const r of ranges) {
+    if (lineIdx >= r.startLine && lineIdx < r.endLineExclusive) return r;
+  }
+  return null;
+}
+
+/**
+ * Decides whether `<scriptGuid, fieldName>` corresponds to a serialized field
+ * that still exists on the script's class. Backed by the LSP document-symbol
+ * provider so it reflects whatever Roslyn / C# Dev Kit sees — never a text
+ * scan of the .cs source.
+ *
+ * `isShadowed` returns:
+ * - `true` — class resolved AND `fieldName` is NOT among its members.
+ * - `false` — class resolved AND `fieldName` IS among them.
+ * - `null` — class couldn't be resolved (no .meta, file gone, LSP cold, etc.).
+ *
+ * Per-call cache keeps the symbol query to one per script.
+ */
+class ShadowedFieldDetector {
+  private readonly cache = new Map<string, Set<string> | null>();
+
+  constructor(private readonly guidToPath: Map<string, string>) {}
+
+  async prefetch(scriptGuid: string): Promise<void> {
+    if (this.cache.has(scriptGuid)) return;
+    this.cache.set(scriptGuid, await this.resolve(scriptGuid));
+  }
+
+  isShadowed(scriptGuid: string, fieldName: string): boolean | null {
+    const fields = this.cache.get(scriptGuid);
+    if (fields === undefined || fields === null) return null;
+    return !fields.has(fieldName);
+  }
+
+  private async resolve(scriptGuid: string): Promise<Set<string> | null> {
+    const scriptPath = this.guidToPath.get(scriptGuid);
+    if (!scriptPath || !scriptPath.endsWith(".cs")) return null;
+    try {
+      const uri = vscode.Uri.file(scriptPath);
+      const symbols = await executeDocumentSymbols(uri);
+      if (!symbols || symbols.length === 0) return null;
+      const names = new Set<string>();
+      collectMemberNames(symbols, names);
+      return names;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function collectMemberNames(
+  symbols: vscode.DocumentSymbol[] | vscode.SymbolInformation[],
+  out: Set<string>,
+): void {
+  for (const sym of symbols) {
+    const kind = sym.kind;
+    if (
+      kind === vscode.SymbolKind.Field ||
+      kind === vscode.SymbolKind.Property ||
+      kind === vscode.SymbolKind.Constant ||
+      kind === vscode.SymbolKind.Variable ||
+      kind === vscode.SymbolKind.EnumMember
+    ) {
+      out.add(stripSignature(sym.name));
+    }
+    const children = (sym as vscode.DocumentSymbol).children;
+    if (children && children.length > 0) collectMemberNames(children, out);
+  }
+}
+
+/**
+ * Document symbol providers sometimes append type info to the name
+ * (`fieldName : Sprite`, `fieldName(): void`). Trim that so we compare against
+ * the raw YAML key.
+ */
+function stripSignature(raw: string): string {
+  return raw.split(/[:\(]/, 1)[0].trim();
 }
 
 function parseFileIDOnLine(line: string): number | null {
