@@ -86,6 +86,37 @@ class FindUsagesTool : AbstractMcpTool() {
                 "For Unity Inspector-wired UnityEvents, also try unity_get_unity_event_bindings."
         }
 
+        /**
+         * Default = 1 (one trimmed hit line) preserves the original wire shape.
+         * Bigger values produce a centered window of N lines, prefixed with
+         * "lineNo: " so callers can keep their bearings. Mirrors the same
+         * helper in vscode-extension/src/tools/navigation/findReferencesTool.ts.
+         */
+        internal fun buildContext(
+            document: com.intellij.openapi.editor.Document,
+            hitLine1Based: Int,
+            contextLines: Int
+        ): String {
+            if (contextLines <= 1) {
+                val l = hitLine1Based - 1
+                return document.getText(
+                    TextRange(document.getLineStartOffset(l), document.getLineEndOffset(l))
+                ).trim()
+            }
+            val radius = (contextLines - 1) / 2
+            val start = maxOf(0, (hitLine1Based - 1) - radius)
+            val end = minOf(document.lineCount - 1, (hitLine1Based - 1) + (contextLines - 1 - radius))
+            val sb = StringBuilder()
+            for (i in start..end) {
+                val text = document.getText(
+                    TextRange(document.getLineStartOffset(i), document.getLineEndOffset(i))
+                )
+                if (sb.isNotEmpty()) sb.append('\n')
+                sb.append(i + 1).append(": ").append(text)
+            }
+            return sb.toString()
+        }
+
         internal fun searchInfrastructureErrorMessage(error: Throwable): String {
             val detail = error.message?.takeIf { it.isNotBlank() }?.let { ": $it" } ?: ""
             return "Reference search failed due to IDE/plugin API incompatibility (${error::class.simpleName}$detail). " +
@@ -123,6 +154,7 @@ class FindUsagesTool : AbstractMcpTool() {
         .intProperty("maxResults", "Maximum results per page (deprecated, use pageSize). Default: $DEFAULT_MAX_RESULTS, max: $MAX_PAGE_SIZE.")
         .stringProperty("cursor", "Pagination cursor from a previous response. When provided, returns the next page of results. Search parameters are ignored; project_path and pageSize may still be provided.")
         .intProperty("pageSize", "Results per page. Default: $DEFAULT_MAX_RESULTS, max: $MAX_PAGE_SIZE.")
+        .intProperty(ParamNames.CONTEXT_LINES, "How many surrounding source lines to include in each usage's context. Default 1 (the hit line only); max 10. Bigger = larger response.")
         .build()
 
     override suspend fun doExecute(project: Project, arguments: JsonObject): ToolCallResult {
@@ -148,6 +180,7 @@ class FindUsagesTool : AbstractMcpTool() {
         val pageSize = resolvePageSize(arguments, DEFAULT_MAX_RESULTS, aliases = arrayOf("maxResults"))
         val collectLimit = maxOf(PaginationService.DEFAULT_OVERCOLLECT, pageSize)
         val excludeGenerated = resolveExcludeGenerated(arguments, default = true)
+        val contextLines = (arguments[ParamNames.CONTEXT_LINES]?.jsonPrimitive?.int ?: 1).coerceIn(1, 10)
         val rawScope = rawScopeValue(arguments[ParamNames.SCOPE])
         val scope = try {
             BuiltInSearchScopeResolver.parse(arguments, BuiltInSearchScope.PROJECT_FILES)
@@ -163,7 +196,7 @@ class FindUsagesTool : AbstractMcpTool() {
         val column = arguments[ParamNames.COLUMN]?.jsonPrimitive?.int
 
         if (file != null && line != null && column != null) {
-            val rdResult = tryRiderFindUsages(project, file, line, column, pageSize)
+            val rdResult = tryRiderFindUsages(project, file, line, column, pageSize, contextLines)
             if (rdResult != null) return rdResult
         }
 
@@ -196,7 +229,7 @@ class FindUsagesTool : AbstractMcpTool() {
                         if (refFile != null && searchScope.contains(refFile) && !isProjectMetadataFile(refFile)) {
                             val total = totalFound.incrementAndGet()
                             if (total <= collectLimit) {
-                                usageInfoToLocation(project, usageInfo, refElement)?.let { usages.add(it) }
+                                usageInfoToLocation(project, usageInfo, refElement, contextLines)?.let { usages.add(it) }
                             }
                             total < totalCountLimit
                         } else {
@@ -220,12 +253,7 @@ class FindUsagesTool : AbstractMcpTool() {
                                     val columnNumber = refElement.textOffset -
                                         document.getLineStartOffset(lineNumber - 1) + 1
 
-                                    val lineText = document.getText(
-                                        TextRange(
-                                            document.getLineStartOffset(lineNumber - 1),
-                                            document.getLineEndOffset(lineNumber - 1)
-                                        )
-                                    ).trim()
+                                    val lineText = buildContext(document, lineNumber, contextLines)
 
                                     usages.add(UsageLocation(
                                         file = getRelativePath(project, refFile),
@@ -258,7 +286,7 @@ class FindUsagesTool : AbstractMcpTool() {
                 suspendingReadAction {
                     val el = smartPointer.element
                         ?: throw IllegalStateException("Target element no longer valid")
-                    extendFindUsages(project, el, seenKeys, limit, scope, excludeGenerated)
+                    extendFindUsages(project, el, seenKeys, limit, scope, excludeGenerated, contextLines)
                 }
             }
 
@@ -318,18 +346,18 @@ class FindUsagesTool : AbstractMcpTool() {
         return null
     }
 
-    private fun usageInfoToLocation(project: Project, usageInfo: UsageInfo, refElement: PsiElement): UsageLocation? {
+    private fun usageInfoToLocation(
+        project: Project,
+        usageInfo: UsageInfo,
+        refElement: PsiElement,
+        contextLines: Int = 1
+    ): UsageLocation? {
         val refFile = refElement.containingFile?.virtualFile ?: return null
         val document = PsiDocumentManager.getInstance(project).getDocument(refElement.containingFile) ?: return null
         val offset = usageInfo.navigationOffset
         val lineNumber = document.getLineNumber(offset) + 1
         val columnNumber = offset - document.getLineStartOffset(lineNumber - 1) + 1
-        val lineText = document.getText(
-            TextRange(
-                document.getLineStartOffset(lineNumber - 1),
-                document.getLineEndOffset(lineNumber - 1)
-            )
-        ).trim()
+        val lineText = buildContext(document, lineNumber, contextLines)
         return UsageLocation(
             file = getRelativePath(project, refFile),
             line = lineNumber,
@@ -346,7 +374,8 @@ class FindUsagesTool : AbstractMcpTool() {
         seenKeys: Set<String>,
         limit: Int,
         scope: BuiltInSearchScope,
-        excludeGenerated: Boolean
+        excludeGenerated: Boolean,
+        contextLines: Int = 1
     ): List<PaginationService.SerializedResult> {
         val newResults = ConcurrentLinkedQueue<PaginationService.SerializedResult>()
         val count = AtomicInteger(0)
@@ -362,7 +391,7 @@ class FindUsagesTool : AbstractMcpTool() {
                     if (refElement == targetElement) return@Processor true
                     val refFile = refElement.containingFile?.virtualFile
                     if (refFile != null && searchScope.contains(refFile) && !isProjectMetadataFile(refFile)) {
-                        val location = usageInfoToLocation(project, usageInfo, refElement) ?: return@Processor true
+                        val location = usageInfoToLocation(project, usageInfo, refElement, contextLines) ?: return@Processor true
                         val key = "${location.file}:${location.line}:${location.column}"
                         if (key !in seenKeys) {
                             val slot = count.incrementAndGet()
@@ -392,9 +421,7 @@ class FindUsagesTool : AbstractMcpTool() {
                             if (key !in seenKeys) {
                                 val slot = count.incrementAndGet()
                                 if (slot <= limit) {
-                                    val lineText = document.getText(
-                                        TextRange(document.getLineStartOffset(lineNumber - 1), document.getLineEndOffset(lineNumber - 1))
-                                    ).trim()
+                                    val lineText = buildContext(document, lineNumber, contextLines)
                                     val usage = UsageLocation(
                                         file = getRelativePath(project, refFile),
                                         line = lineNumber,
@@ -489,7 +516,8 @@ class FindUsagesTool : AbstractMcpTool() {
         filePath: String,
         line: Int,
         column: Int,
-        pageSize: Int
+        pageSize: Int,
+        contextLines: Int
     ): ToolCallResult? {
         val virtualFile = PsiUtils.resolveVirtualFileAnywhere(project, filePath) ?: return null
         if (!RiderProtocolHost.shouldUseRiderProtocol(virtualFile)) return null
@@ -504,14 +532,32 @@ class FindUsagesTool : AbstractMcpTool() {
 
         val rdUsages = RiderProtocolHost.findUsagesViaRd(project, virtualFile, offset) ?: return null
 
+        val usageFileDocumentCache = mutableMapOf<String, com.intellij.openapi.editor.Document?>()
         val usages = rdUsages.map { usage ->
             val relPath = ProjectUtils.getRelativePath(project, usage.filePath)
             val type = classifyRdUsage(usage)
+            val context = if (contextLines <= 1) {
+                usage.text.trim()
+            } else {
+                // Resolve the usage's file once per file to read N surrounding
+                // lines. Falls back to the single-line Rider-supplied text if
+                // the document can't be opened.
+                val doc = usageFileDocumentCache.getOrPut(usage.filePath) {
+                    suspendingReadAction {
+                        PsiUtils.resolveVirtualFileAnywhere(project, usage.filePath)?.let { vf ->
+                            PsiUtils.getPsiFile(project, vf.path)?.let { pf ->
+                                PsiDocumentManager.getInstance(project).getDocument(pf)
+                            }
+                        }
+                    }
+                }
+                doc?.let { buildContext(it, usage.line, contextLines) } ?: usage.text.trim()
+            }
             UsageLocation(
                 file = relPath,
                 line = usage.line,
                 column = usage.column,
-                context = usage.text.trim(),
+                context = context,
                 type = type,
                 astPath = usage.groupTexts
             )

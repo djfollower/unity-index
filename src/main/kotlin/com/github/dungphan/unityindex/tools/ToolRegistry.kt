@@ -10,6 +10,7 @@ import com.github.dungphan.unityindex.tools.navigation.FindDefinitionTool
 import com.github.dungphan.unityindex.tools.navigation.FindFileTool
 import com.github.dungphan.unityindex.tools.navigation.FindSymbolTool
 import com.github.dungphan.unityindex.tools.navigation.FindUsagesTool
+import com.github.dungphan.unityindex.tools.navigation.GetSymbolBodyTool
 import com.github.dungphan.unityindex.tools.navigation.ReadFileTool
 import com.github.dungphan.unityindex.tools.navigation.SearchTextTool
 import com.github.dungphan.unityindex.tools.project.BuildProjectTool
@@ -112,6 +113,7 @@ class ToolRegistry {
         register(FindSymbolTool())
         register(SearchTextTool())
         register(ReadFileTool())
+        register(GetSymbolBodyTool())
 
         LOG.info("Registered universal tools")
     }

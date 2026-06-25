@@ -217,6 +217,17 @@ export interface SearchTextResult {
   hint?: string;
 }
 
+export interface SymbolBodyResult {
+  file: string;
+  symbolKind: string;
+  symbolName: string;
+  qualifiedName: string;
+  startLine: number;
+  endLine: number;
+  text: string;
+  truncated: boolean;
+}
+
 export interface FileStructureItem {
   name: string;
   kind: string;

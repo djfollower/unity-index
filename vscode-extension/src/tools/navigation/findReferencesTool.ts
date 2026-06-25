@@ -3,7 +3,7 @@ import { AbstractMcpTool, fromPosition, toPosition } from "../abstractTool";
 import { TOOL_NAMES, PARAM_NAMES } from "../../constants";
 import { ToolCallResult } from "../../models/jsonRpc";
 import { ProjectContext, resolveFilePath, toRelativePath } from "../../server/projectResolver";
-import { Args, optionalInt, requireString } from "../../utils/args";
+import { Args, clamp, optionalInt, requireString } from "../../utils/args";
 import { SchemaBuilder } from "../../utils/schema";
 import { executeReferences } from "../../utils/lspBridge";
 import { FindUsagesResult, UsageLocation } from "../../models/toolModels";
@@ -20,6 +20,10 @@ export class FindReferencesTool extends AbstractMcpTool {
     .file(true)
     .lineAndColumn(true)
     .intProperty(PARAM_NAMES.MAX_RESULTS, "Max results to return. Default 500.")
+    .intProperty(
+      PARAM_NAMES.CONTEXT_LINES,
+      "How many surrounding source lines to include per usage. Default 1 (the hit line only); max 10. Bigger = larger response; use when you need to see the enclosing scope without a follow-up read.",
+    )
     .build();
 
   protected async doExecute(
@@ -33,6 +37,11 @@ export class FindReferencesTool extends AbstractMcpTool {
       return this.error("Missing line or column");
     }
     const maxResults = optionalInt(args, PARAM_NAMES.MAX_RESULTS) ?? 500;
+    const contextLines = clamp(
+      optionalInt(args, PARAM_NAMES.CONTEXT_LINES) ?? 1,
+      1,
+      10,
+    );
 
     const uri = vscode.Uri.file(resolveFilePath(project, file));
     const locations = await executeReferences(uri, toPosition(line, column));
@@ -44,7 +53,9 @@ export class FindReferencesTool extends AbstractMcpTool {
     for (const loc of slice) {
       const doc = await safeOpen(loc.uri);
       const startLine = loc.range.start.line;
-      const context = doc?.lineAt(startLine).text.trim() ?? "";
+      const context = doc
+        ? extractContext(doc, startLine, contextLines)
+        : "";
       usages.push({
         file: toRelativePath(project, loc.uri.fsPath),
         line: startLine + 1,
@@ -107,4 +118,25 @@ async function safeOpen(uri: vscode.Uri): Promise<vscode.TextDocument | undefine
   } catch {
     return undefined;
   }
+}
+
+/**
+ * One line by default (preserves 0.4.0 wire shape) or a centered window when
+ * the caller opts into more. The hit line is the middle of the window; we
+ * clip to file bounds rather than padding so the result stays cheap to scan.
+ */
+function extractContext(
+  doc: vscode.TextDocument,
+  hitLine: number,
+  contextLines: number,
+): string {
+  if (contextLines <= 1) return doc.lineAt(hitLine).text.trim();
+  const radius = Math.floor((contextLines - 1) / 2);
+  const start = Math.max(0, hitLine - radius);
+  const end = Math.min(doc.lineCount - 1, hitLine + (contextLines - 1 - radius));
+  const out: string[] = [];
+  for (let i = start; i <= end; i++) {
+    out.push(`${i + 1}: ${doc.lineAt(i).text}`);
+  }
+  return out.join("\n");
 }

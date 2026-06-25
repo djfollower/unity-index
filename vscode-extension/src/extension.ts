@@ -23,6 +23,7 @@ import { FindFileTool } from "./tools/navigation/findFileTool";
 import { FileStructureTool } from "./tools/navigation/fileStructureTool";
 import { SearchTextTool } from "./tools/navigation/searchTextTool";
 import { ReadFileTool } from "./tools/navigation/readFileTool";
+import { GetSymbolBodyTool } from "./tools/navigation/getSymbolBodyTool";
 
 // Intelligence
 import { GetDiagnosticsTool } from "./tools/intelligence/getDiagnosticsTool";
@@ -75,6 +76,7 @@ function buildRegistry(): ToolRegistry {
   registry.register(new FileStructureTool());
   registry.register(new SearchTextTool());
   registry.register(new ReadFileTool());
+  registry.register(new GetSymbolBodyTool());
   // Intelligence
   registry.register(new GetDiagnosticsTool());
   // Project

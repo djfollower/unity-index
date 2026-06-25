@@ -56,6 +56,7 @@ object ParamNames {
     // Preview parameters
     const val FULL_ELEMENT_PREVIEW = "fullElementPreview"
     const val MAX_PREVIEW_LINES = "maxPreviewLines"
+    const val CONTEXT_LINES = "contextLines"
 
     // Filter parameters
     const val LANGUAGE = "language"

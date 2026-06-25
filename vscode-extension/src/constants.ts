@@ -29,6 +29,7 @@ export const TOOL_NAMES = {
   FILE_STRUCTURE: "ide_file_structure",
   SEARCH_TEXT: "ide_search_text",
   READ_FILE: "ide_read_file",
+  GET_SYMBOL_BODY: "ide_get_symbol_body",
 
   // Intelligence
   DIAGNOSTICS: "ide_diagnostics",
@@ -75,6 +76,7 @@ export const PARAM_NAMES = {
   INCLUDE_RAW_OUTPUT: "includeRawOutput",
   CLASS_NAME: "className",
   PATH: "path",
+  CONTEXT_LINES: "contextLines",
 } as const;
 
 export const JSON_RPC_METHODS = {

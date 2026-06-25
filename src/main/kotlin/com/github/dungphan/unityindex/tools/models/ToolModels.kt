@@ -46,6 +46,19 @@ data class DefinitionResult(
     val astPath: List<String>
 )
 
+// ide_get_symbol_body output
+@Serializable
+data class SymbolBodyResult(
+    val file: String,
+    val symbolKind: String,
+    val symbolName: String,
+    val qualifiedName: String,
+    val startLine: Int,
+    val endLine: Int,
+    val text: String,
+    val truncated: Boolean
+)
+
 // ide_read_file output
 @Serializable
 data class ReadFileResult(
