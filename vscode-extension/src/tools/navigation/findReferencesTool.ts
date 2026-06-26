@@ -3,10 +3,11 @@ import { AbstractMcpTool, fromPosition, toPosition } from "../abstractTool";
 import { TOOL_NAMES, PARAM_NAMES } from "../../constants";
 import { ToolCallResult } from "../../models/jsonRpc";
 import { ProjectContext, resolveFilePath, toRelativePath } from "../../server/projectResolver";
-import { Args, clamp, optionalInt, requireString } from "../../utils/args";
+import { Args, clamp, optionalBoolean, optionalInt, requireString } from "../../utils/args";
 import { SchemaBuilder } from "../../utils/schema";
 import { executeReferences } from "../../utils/lspBridge";
 import { FindUsagesResult, UsageLocation } from "../../models/toolModels";
+import { findOverrideMembers } from "../../utils/qualifiedMemberResolver";
 
 export class FindReferencesTool extends AbstractMcpTool {
   readonly name = TOOL_NAMES.FIND_REFERENCES;
@@ -23,6 +24,10 @@ export class FindReferencesTool extends AbstractMcpTool {
     .intProperty(
       PARAM_NAMES.CONTEXT_LINES,
       "How many surrounding source lines to include per usage. Default 1 (the hit line only); max 10. Bigger = larger response; use when you need to see the enclosing scope without a follow-up read.",
+    )
+    .booleanProperty(
+      PARAM_NAMES.INCLUDE_OVERRIDES,
+      "Also include usages of overrides/redeclarations in subtypes. Default: false. When the target is a base-class member (e.g. Item.UniqueID) and subclasses redeclare it (e.g. Product.UniqueID), turning this on returns usages of all overrides too — needed for true impact analysis.",
     )
     .build();
 
@@ -42,12 +47,43 @@ export class FindReferencesTool extends AbstractMcpTool {
       1,
       10,
     );
+    const includeOverrides = optionalBoolean(args, PARAM_NAMES.INCLUDE_OVERRIDES) ?? false;
 
     const uri = vscode.Uri.file(resolveFilePath(project, file));
-    const locations = await executeReferences(uri, toPosition(line, column));
+    const basePosition = toPosition(line, column);
+    const allLocations: vscode.Location[] = [];
+    allLocations.push(...(await executeReferences(uri, basePosition)));
 
-    const truncated = locations.length > maxResults;
-    const slice = truncated ? locations.slice(0, maxResults) : locations;
+    let overrideCount = 0;
+    if (includeOverrides) {
+      const baseDoc = await safeOpen(uri);
+      const memberName = baseDoc ? readIdentifierAt(baseDoc, basePosition) : null;
+      if (memberName) {
+        const overrides = await findOverrideMembers(project, uri, basePosition, memberName);
+        overrideCount = overrides.length;
+        for (const override of overrides) {
+          try {
+            const refs = await executeReferences(override.uri, override.position);
+            allLocations.push(...refs);
+          } catch {
+            // skip individual override failures
+          }
+        }
+      }
+    }
+
+    // Dedupe across base + override reference sets.
+    const seen = new Set<string>();
+    const deduped: vscode.Location[] = [];
+    for (const loc of allLocations) {
+      const key = `${loc.uri.fsPath}:${loc.range.start.line}:${loc.range.start.character}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(loc);
+    }
+
+    const truncated = deduped.length > maxResults;
+    const slice = truncated ? deduped.slice(0, maxResults) : deduped;
 
     const usages: UsageLocation[] = [];
     for (const loc of slice) {
@@ -66,14 +102,30 @@ export class FindReferencesTool extends AbstractMcpTool {
       });
     }
 
+    const baseHint = handlerRegistrationHint(usages);
+    const overrideHint =
+      includeOverrides && overrideCount > 0
+        ? `Includes usages of ${overrideCount} override(s) on subtypes.`
+        : null;
+    const combinedHint = [baseHint, overrideHint].filter(Boolean).join(" ") || undefined;
+
     const result: FindUsagesResult = {
       usages,
-      totalCount: locations.length,
+      totalCount: deduped.length,
       truncated,
-      hint: handlerRegistrationHint(usages) ?? undefined,
+      hint: combinedHint,
     };
     return this.json(result);
   }
+}
+
+function readIdentifierAt(
+  doc: vscode.TextDocument,
+  position: vscode.Position,
+): string | null {
+  const range = doc.getWordRangeAtPosition(position);
+  if (!range) return null;
+  return doc.getText(range);
 }
 
 /**

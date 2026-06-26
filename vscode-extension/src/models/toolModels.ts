@@ -15,6 +15,8 @@ export interface FindUsagesResult {
   truncated?: boolean;
   /** Optional caller-side guidance — present when the result shape suggests a follow-up (e.g. event-handler pattern). */
   hint?: string;
+  /** Set when the requested Type.Member resolved through an inheritance fallback (member declared on a base type). */
+  resolvedFrom?: ResolvedFrom;
 }
 
 export interface DefinitionResult {
@@ -147,6 +149,19 @@ export interface SymbolMatch {
   column: number;
   containerName: string | null;
   language?: string;
+  /** Set when the requested Type.Member wasn't declared on Type and we resolved it on a base class. */
+  resolvedFrom?: ResolvedFrom;
+}
+
+export interface ResolvedFrom {
+  /** Requested type (e.g. "Product"). */
+  requestedType: string;
+  /** Requested member (e.g. "UniqueId"). */
+  requestedMember: string;
+  /** Class where the member is actually declared (e.g. "Item"). */
+  declaringType: string;
+  /** Kind of fallback: BASE_CLASS_FALLBACK, INTERFACE_FALLBACK. */
+  kind: string;
 }
 
 export interface FindSymbolResult {

@@ -8,6 +8,7 @@ import { SchemaBuilder } from "../../utils/schema";
 import { executeWorkspaceSymbols } from "../../utils/lspBridge";
 import { FindSymbolResult, SymbolMatch } from "../../models/toolModels";
 import { unityAssetHintForEmptyResult } from "../../utils/unityAssetQueryHint";
+import { resolveInheritedMember } from "../../utils/qualifiedMemberResolver";
 
 export class FindSymbolTool extends AbstractMcpTool {
   readonly name = TOOL_NAMES.FIND_SYMBOL;
@@ -32,13 +33,29 @@ export class FindSymbolTool extends AbstractMcpTool {
       s.location.uri.fsPath.startsWith(project.rootPath),
     );
     const slice = filtered.slice(0, limit);
-    const symbols: SymbolMatch[] = slice.map((s) => toSymbolMatch(s, project));
+    let symbols: SymbolMatch[] = slice.map((s) => toSymbolMatch(s, project));
+    let totalCount = filtered.length;
+    let inheritedHint: string | undefined;
+
+    // Inheritance fallback: when "Type.Member" returns nothing, try resolving Member on a base
+    // class of Type. Mirrors the Kotlin QualifiedMemberResolver.
+    if (symbols.length === 0) {
+      const inherited = await resolveInheritedMember(project, query);
+      if (inherited) {
+        symbols = [inherited.symbolMatch];
+        totalCount = 1;
+        const { requestedType, requestedMember, declaringType } = inherited.resolvedFrom;
+        inheritedHint = `${requestedType}.${requestedMember} isn't declared on ${requestedType}; resolved on base type ${declaringType}.`;
+      }
+    }
 
     const result: FindSymbolResult = {
       symbols,
-      totalCount: filtered.length,
+      totalCount,
       query,
-      hint: symbols.length === 0 ? unityAssetHintForEmptyResult(query) : undefined,
+      hint:
+        inheritedHint ??
+        (symbols.length === 0 ? unityAssetHintForEmptyResult(query) : undefined),
     };
     return this.json(result);
   }

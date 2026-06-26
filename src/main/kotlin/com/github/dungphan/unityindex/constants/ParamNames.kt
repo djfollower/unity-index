@@ -52,6 +52,7 @@ object ParamNames {
     const val REGEX = "regex"
     const val CURSOR = "cursor"
     const val INCLUDE_GENERATED = "includeGenerated"
+    const val INCLUDE_OVERRIDES = "includeOverrides"
 
     // Preview parameters
     const val FULL_ELEMENT_PREVIEW = "fullElementPreview"

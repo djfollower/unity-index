@@ -5,6 +5,7 @@ import com.github.dungphan.unityindex.constants.ToolNames
 import com.github.dungphan.unityindex.handlers.BuiltInSearchScope
 import com.github.dungphan.unityindex.handlers.BuiltInSearchScopeResolver
 import com.github.dungphan.unityindex.handlers.OptimizedSymbolSearch
+import com.github.dungphan.unityindex.handlers.QualifiedMemberResolver
 import com.github.dungphan.unityindex.handlers.SymbolData
 import com.github.dungphan.unityindex.server.PaginationService
 import com.github.dungphan.unityindex.server.ProjectResolver
@@ -116,7 +117,19 @@ class FindSymbolTool : AbstractMcpTool() {
                 languageFilter = nativeLanguageFilter
             )
 
-            val matches = symbols.map { it.toSymbolMatch() }
+            // Inheritance fallback: when "Type.Member" returns nothing, try resolving Member on
+            // a base class of Type. Mirrors the TS QualifiedMemberResolver.
+            val matches: List<SymbolMatch> = if (symbols.isEmpty()) {
+                val inherited = QualifiedMemberResolver.resolveInherited(
+                    project = project,
+                    query = query,
+                    scope = searchScope,
+                    languageFilter = nativeLanguageFilter
+                )
+                if (inherited != null) listOf(inherited) else emptyList()
+            } else {
+                symbols.map { it.toSymbolMatch() }
+            }
 
             val searchExtender: suspend (Set<String>, Int) -> List<PaginationService.SerializedResult> = { seenKeys, limit ->
                 suspendingReadAction {
@@ -145,6 +158,10 @@ class FindSymbolTool : AbstractMcpTool() {
 
         return buildPaginatedResult<SymbolMatch, FindSymbolResult>(getPageFromCache(token, pageSize, project)) { items, page ->
             val effectiveQuery = page.metadata["query"] ?: ""
+            val fallbackMatch = items.firstOrNull { it.resolvedFrom != null }
+            val resolutionHint = fallbackMatch?.resolvedFrom?.let {
+                "${it.requestedType}.${it.requestedMember} isn't declared on ${it.requestedType}; resolved on base type ${it.declaringType}."
+            }
             FindSymbolResult(
                 symbols = items,
                 totalCount = page.totalCollected,
@@ -155,7 +172,8 @@ class FindSymbolTool : AbstractMcpTool() {
                 offset = page.offset,
                 pageSize = page.pageSize,
                 stale = page.stale,
-                hint = if (items.isEmpty() && page.totalCollected == 0) UnityAssetQueryHint.forEmptyResult(effectiveQuery) else null
+                hint = resolutionHint
+                    ?: if (items.isEmpty() && page.totalCollected == 0) UnityAssetQueryHint.forEmptyResult(effectiveQuery) else null
             )
         }
     }

@@ -66,12 +66,24 @@ object OptimizedSymbolSearch {
 
             while (true) {
                 val popupResults = PopupFaithfulSymbolSearch.search(project, pattern, scope, popupLimit)
-                val results = popupResults.candidates
+                val symbolResults = popupResults.candidates
                     .mapNotNull { candidate -> convertToSymbolData(candidate.item, project, scope, languageFilter) }
+
+                // Go to Symbol intentionally excludes classes. Merge in class popup hits so a bare
+                // class-name query like "Product" still resolves through ide_find_symbol.
+                val classResults = try {
+                    PopupFaithfulSymbolSearch.searchClasses(project, pattern, scope, popupLimit).candidates
+                        .mapNotNull { candidate -> convertToSymbolData(candidate.item, project, scope, languageFilter) }
+                } catch (e: Exception) {
+                    LOG.debug("Class popup merge failed: ${e.message}", e)
+                    emptyList()
+                }
+
+                val results = (symbolResults + classResults)
                     .distinctBy { "${it.file}:${it.line}:${it.column}:${it.name}" }
 
                 if (results.size >= limit || popupResults.candidates.size < popupLimit || popupLimit >= popupLimitCap) {
-                    LOG.debug("Found ${results.size} symbols via popup-backed search")
+                    LOG.debug("Found ${results.size} symbols via popup-backed search (symbols=${symbolResults.size}, classes=${classResults.size})")
                     return results.take(limit)
                 }
 

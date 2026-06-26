@@ -6,6 +6,8 @@ import com.github.dungphan.unityindex.constants.ToolNames
 import com.github.dungphan.unityindex.constants.UsageTypes
 import com.github.dungphan.unityindex.handlers.BuiltInSearchScope
 import com.github.dungphan.unityindex.handlers.BuiltInSearchScopeResolver
+import com.github.dungphan.unityindex.handlers.QualifiedMemberResolver
+import com.github.dungphan.unityindex.tools.models.ResolvedFrom
 import com.github.dungphan.unityindex.server.PaginationService
 import com.github.dungphan.unityindex.server.ProjectResolver
 import com.github.dungphan.unityindex.server.models.ToolCallResult
@@ -35,6 +37,8 @@ import com.intellij.util.Processor
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
@@ -151,6 +155,7 @@ class FindUsagesTool : AbstractMcpTool() {
         .languageAndSymbol(required = false)
         .scopeProperty("Search scope. Default: project_files.")
         .booleanProperty(ParamNames.INCLUDE_GENERATED, "Include references in generated sources. Default: true. Set false to drop generated output when it dominates the result set.")
+        .booleanProperty(ParamNames.INCLUDE_OVERRIDES, "Also include usages of overrides/redeclarations in subtypes. Default: false. When the target is a base-class member (e.g. Item.UniqueID) and subclasses redeclare it (e.g. Product.UniqueID), turning this on returns usages of all overrides too — needed for true impact analysis.")
         .intProperty("maxResults", "Maximum results per page (deprecated, use pageSize). Default: $DEFAULT_MAX_RESULTS, max: $MAX_PAGE_SIZE.")
         .stringProperty("cursor", "Pagination cursor from a previous response. When provided, returns the next page of results. Search parameters are ignored; project_path and pageSize may still be provided.")
         .intProperty("pageSize", "Results per page. Default: $DEFAULT_MAX_RESULTS, max: $MAX_PAGE_SIZE.")
@@ -180,6 +185,8 @@ class FindUsagesTool : AbstractMcpTool() {
         val pageSize = resolvePageSize(arguments, DEFAULT_MAX_RESULTS, aliases = arrayOf("maxResults"))
         val collectLimit = maxOf(PaginationService.DEFAULT_OVERCOLLECT, pageSize)
         val excludeGenerated = resolveExcludeGenerated(arguments, default = true)
+        val includeOverrides = arguments[ParamNames.INCLUDE_OVERRIDES]?.jsonPrimitive?.contentOrNull?.equals("true", ignoreCase = true) == true
+            || arguments[ParamNames.INCLUDE_OVERRIDES]?.jsonPrimitive?.booleanOrNull == true
         val contextLines = (arguments[ParamNames.CONTEXT_LINES]?.jsonPrimitive?.int ?: 1).coerceIn(1, 10)
         val rawScope = rawScopeValue(arguments[ParamNames.SCOPE])
         val scope = try {
@@ -200,9 +207,24 @@ class FindUsagesTool : AbstractMcpTool() {
             if (rdResult != null) return rdResult
         }
 
+        var inheritedFrom: ResolvedFrom? = null
+        var overridesWalked = 0
         val cursorToken = suspendingReadAction {
-            val element = resolveElementFromArguments(project, arguments, allowLibraryFilesForPosition = true).getOrElse {
-                return@suspendingReadAction null to createErrorResult(it.message ?: ErrorMessages.COULD_NOT_RESOLVE_SYMBOL)
+            val resolution = resolveElementFromArguments(project, arguments, allowLibraryFilesForPosition = true)
+            val element = resolution.getOrElse { failure ->
+                // Inheritance fallback: a Type.Member symbol query that the language handler couldn't
+                // resolve (e.g. Product.UniqueId where UniqueId lives on base class Item).
+                val symbol = optionalStringArg(arguments, ParamNames.SYMBOL)
+                val searchScope = BuiltInSearchScopeResolver.resolveGlobalScope(project, scope, excludeGenerated)
+                val inherited = symbol?.let {
+                    QualifiedMemberResolver.resolveInheritedElement(project, it, searchScope)
+                }
+                if (inherited != null) {
+                    inheritedFrom = inherited.resolvedFrom
+                    inherited.element
+                } else {
+                    return@suspendingReadAction null to createErrorResult(failure.message ?: ErrorMessages.COULD_NOT_RESOLVE_SYMBOL)
+                }
             }
 
             val targetElement = element as? PsiNamedElement
@@ -277,6 +299,46 @@ class FindUsagesTool : AbstractMcpTool() {
                 return@suspendingReadAction null to createErrorResult(searchInfrastructureErrorMessage(e))
             }
 
+            // Override walking: ReferencesSearch on the base member doesn't include calls dispatched
+            // through subclass redeclarations (Product.UniqueID, etc.). Walk them when requested.
+            if (includeOverrides && totalFound.get() < totalCountLimit) {
+                val overrides = QualifiedMemberResolver.findOverrideMembers(project, targetElement, searchScope)
+                overridesWalked = overrides.size
+                for (override in overrides) {
+                    if (totalFound.get() >= totalCountLimit) break
+                    try {
+                        ReferencesSearch.search(override.element, searchScope).forEach(Processor { reference ->
+                            ProgressManager.checkCanceled()
+                            val refElement = reference.element
+                            val refFile = refElement.containingFile?.virtualFile
+                            if (refFile != null && searchScope.contains(refFile) && !isProjectMetadataFile(refFile)) {
+                                val total = totalFound.incrementAndGet()
+                                if (total <= collectLimit) {
+                                    val document = PsiDocumentManager.getInstance(project)
+                                        .getDocument(refElement.containingFile)
+                                    if (document != null) {
+                                        val lineNumber = document.getLineNumber(refElement.textOffset) + 1
+                                        val columnNumber = refElement.textOffset -
+                                            document.getLineStartOffset(lineNumber - 1) + 1
+                                        usages.add(UsageLocation(
+                                            file = getRelativePath(project, refFile),
+                                            line = lineNumber,
+                                            column = columnNumber,
+                                            context = buildContext(document, lineNumber, contextLines),
+                                            type = classifyUsage(refElement),
+                                            astPath = PsiUtils.getAstPath(refElement) + "via ${override.typeName}"
+                                        ))
+                                    }
+                                }
+                                total < totalCountLimit
+                            } else true
+                        })
+                    } catch (e: Exception) {
+                        LOG.debug("Override usage search failed for ${override.typeName}: ${e.message}", e)
+                    }
+                }
+            }
+
             val usagesList = usages.toList()
                 .distinctBy { "${it.file}:${it.line}:${it.column}" }
 
@@ -313,7 +375,16 @@ class FindUsagesTool : AbstractMcpTool() {
         val (token, errorResult) = cursorToken
         if (errorResult != null) return errorResult
 
+        val inheritedResolution = inheritedFrom
+        val overridesCount = overridesWalked
+        val overrideRequested = includeOverrides
         return buildPaginatedResult<UsageLocation, FindUsagesResult>(getPageFromCache(token!!, pageSize, project)) { items, page ->
+            val baseHint = inheritedResolution?.let {
+                "${it.requestedType}.${it.requestedMember} isn't declared on ${it.requestedType}; usages reported for base type ${it.declaringType}.${it.requestedMember}."
+            } ?: handlerRegistrationHint(items)
+            val overrideHint = if (overrideRequested && overridesCount > 0) {
+                "Includes usages of $overridesCount override(s) on subtypes."
+            } else null
             FindUsagesResult(
                 usages = items,
                 totalCount = page.totalCollected,
@@ -324,7 +395,8 @@ class FindUsagesTool : AbstractMcpTool() {
                 offset = page.offset,
                 pageSize = page.pageSize,
                 stale = page.stale,
-                hint = handlerRegistrationHint(items)
+                hint = listOfNotNull(baseHint, overrideHint).joinToString(" ").ifBlank { null },
+                resolvedFrom = inheritedResolution
             )
         }
     }

@@ -32,7 +32,9 @@ data class FindUsagesResult(
     val pageSize: Int = 0,
     val stale: Boolean = false,
     /** Optional caller-side guidance — present when the result shape suggests a follow-up (e.g. event-handler pattern). */
-    val hint: String? = null
+    val hint: String? = null,
+    /** Set when the requested Type.Member resolved through an inheritance fallback (member declared on a base type). */
+    val resolvedFrom: ResolvedFrom? = null
 )
 
 // find_definition output
@@ -262,7 +264,21 @@ data class SymbolMatch(
     val line: Int,
     val column: Int,
     val containerName: String?,
-    val language: String? = null
+    val language: String? = null,
+    /** Set when the requested Type.Member wasn't declared on Type and we resolved it on a base class. */
+    val resolvedFrom: ResolvedFrom? = null
+)
+
+@Serializable
+data class ResolvedFrom(
+    /** Requested type (e.g. "Product"). */
+    val requestedType: String,
+    /** Requested member (e.g. "UniqueId"). */
+    val requestedMember: String,
+    /** Class where the member is actually declared (e.g. "Item"). */
+    val declaringType: String,
+    /** Kind of fallback: BASE_CLASS_FALLBACK, INTERFACE_FALLBACK. */
+    val kind: String
 )
 
 // ide_find_super_methods output

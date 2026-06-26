@@ -69,6 +69,7 @@ export const PARAM_NAMES = {
   FULL_ELEMENT_PREVIEW: "fullElementPreview",
   MAX_PREVIEW_LINES: "maxPreviewLines",
   INCLUDE_GENERATED: "includeGenerated",
+  INCLUDE_OVERRIDES: "includeOverrides",
   INCLUDE_BUILD_ERRORS: "includeBuildErrors",
   SEVERITY: "severity",
   REBUILD: "rebuild",
