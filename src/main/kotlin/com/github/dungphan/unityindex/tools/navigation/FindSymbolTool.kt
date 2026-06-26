@@ -13,6 +13,7 @@ import com.github.dungphan.unityindex.tools.AbstractMcpTool
 import com.github.dungphan.unityindex.tools.models.FindSymbolResult
 import com.github.dungphan.unityindex.tools.models.SymbolMatch
 import com.github.dungphan.unityindex.tools.schema.SchemaBuilder
+import com.github.dungphan.unityindex.util.UnityAssetQueryHint
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.psi.util.PsiModificationTracker
@@ -143,16 +144,18 @@ class FindSymbolTool : AbstractMcpTool() {
         }
 
         return buildPaginatedResult<SymbolMatch, FindSymbolResult>(getPageFromCache(token, pageSize, project)) { items, page ->
+            val effectiveQuery = page.metadata["query"] ?: ""
             FindSymbolResult(
                 symbols = items,
                 totalCount = page.totalCollected,
-                query = page.metadata["query"] ?: "",
+                query = effectiveQuery,
                 nextCursor = page.nextCursor,
                 hasMore = page.hasMore,
                 totalCollected = page.totalCollected,
                 offset = page.offset,
                 pageSize = page.pageSize,
-                stale = page.stale
+                stale = page.stale,
+                hint = if (items.isEmpty() && page.totalCollected == 0) UnityAssetQueryHint.forEmptyResult(effectiveQuery) else null
             )
         }
     }

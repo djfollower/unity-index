@@ -8,6 +8,7 @@ import { SchemaBuilder } from "../../utils/schema";
 import { executeWorkspaceSymbols } from "../../utils/lspBridge";
 import { FindClassResult } from "../../models/toolModels";
 import { toSymbolMatch } from "./findSymbolTool";
+import { unityAssetHintForEmptyResult } from "../../utils/unityAssetQueryHint";
 
 const CLASS_KINDS = new Set<vscode.SymbolKind>([
   vscode.SymbolKind.Class,
@@ -45,6 +46,7 @@ export class FindClassTool extends AbstractMcpTool {
       classes: slice.map((s) => toSymbolMatch(s, project)),
       totalCount: filtered.length,
       query: className,
+      hint: slice.length === 0 ? unityAssetHintForEmptyResult(className) : undefined,
     };
     return this.json(result);
   }

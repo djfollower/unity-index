@@ -7,6 +7,7 @@ import { Args, optionalInt, requireString } from "../../utils/args";
 import { SchemaBuilder } from "../../utils/schema";
 import { executeWorkspaceSymbols } from "../../utils/lspBridge";
 import { FindSymbolResult, SymbolMatch } from "../../models/toolModels";
+import { unityAssetHintForEmptyResult } from "../../utils/unityAssetQueryHint";
 
 export class FindSymbolTool extends AbstractMcpTool {
   readonly name = TOOL_NAMES.FIND_SYMBOL;
@@ -37,6 +38,7 @@ export class FindSymbolTool extends AbstractMcpTool {
       symbols,
       totalCount: filtered.length,
       query,
+      hint: symbols.length === 0 ? unityAssetHintForEmptyResult(query) : undefined,
     };
     return this.json(result);
   }

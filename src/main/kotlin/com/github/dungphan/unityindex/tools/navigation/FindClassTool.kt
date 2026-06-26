@@ -16,6 +16,7 @@ import com.github.dungphan.unityindex.tools.models.SymbolMatch
 import com.github.dungphan.unityindex.tools.schema.SchemaBuilder
 import com.github.dungphan.unityindex.util.ProjectUtils
 import com.github.dungphan.unityindex.util.RiderNavigationProbe
+import com.github.dungphan.unityindex.util.UnityAssetQueryHint
 import com.intellij.navigation.ChooseByNameContributor
 import com.intellij.navigation.ChooseByNameContributorEx
 import com.intellij.navigation.NavigationItem
@@ -167,16 +168,18 @@ class FindClassTool : AbstractMcpTool() {
         }
 
         return buildPaginatedResult<SymbolMatch, FindClassResult>(getPageFromCache(cursorToken, pageSize, project)) { items, page ->
+            val effectiveQuery = page.metadata["query"] ?: ""
             FindClassResult(
                 classes = items,
                 totalCount = page.totalCollected,
-                query = page.metadata["query"] ?: "",
+                query = effectiveQuery,
                 nextCursor = page.nextCursor,
                 hasMore = page.hasMore,
                 totalCollected = page.totalCollected,
                 offset = page.offset,
                 pageSize = page.pageSize,
-                stale = page.stale
+                stale = page.stale,
+                hint = if (items.isEmpty() && page.totalCollected == 0) UnityAssetQueryHint.forEmptyResult(effectiveQuery) else null
             )
         }
     }

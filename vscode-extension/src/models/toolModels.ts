@@ -153,12 +153,16 @@ export interface FindSymbolResult {
   symbols: SymbolMatch[];
   totalCount: number;
   query: string;
+  /** Optional caller-side guidance — e.g. when the query looks like a Unity asset filename. */
+  hint?: string;
 }
 
 export interface FindClassResult {
   classes: SymbolMatch[];
   totalCount: number;
   query: string;
+  /** Optional caller-side guidance — e.g. when the query looks like a Unity asset filename. */
+  hint?: string;
 }
 
 export interface FileMatch {

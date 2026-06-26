@@ -248,7 +248,9 @@ data class FindSymbolResult(
     val totalCollected: Int = 0,
     val offset: Int = 0,
     val pageSize: Int = 0,
-    val stale: Boolean = false
+    val stale: Boolean = false,
+    /** Optional caller-side guidance — e.g. when the query looks like a Unity asset filename. */
+    val hint: String? = null
 )
 
 @Serializable
@@ -307,7 +309,9 @@ data class FindClassResult(
     val totalCollected: Int = 0,
     val offset: Int = 0,
     val pageSize: Int = 0,
-    val stale: Boolean = false
+    val stale: Boolean = false,
+    /** Optional caller-side guidance — e.g. when the query looks like a Unity asset filename. */
+    val hint: String? = null
 )
 
 // ide_find_file output
