@@ -25,6 +25,15 @@ Based on [jetbrains-index-mcp-plugin](https://github.com/hechtcarmel/jetbrains-i
    - If a feature genuinely cannot be ported (e.g. a Rider-only API), document the gap in `vscode-extension/README.md` instead of silently diverging.
    - When in doubt, port the Kotlin behavior literally to TypeScript (or vice versa). Same tool names, same parameter names, same JSON field names.
 
+4. **Rider RD-backed PSI proxies need defensive resolution — share the helpers, don't reinvent them.** In Rider, C# items often arrive as `ProtocolNavigationItem` / RD-backed PSI proxies. These reliably misbehave in three specific ways that have burned us before:
+   - `PsiNamedElement.name` and reflective `getName()` return `null` or blank; the only carrier of the identifier is the popup `NavigationItem.name` (e.g. `"UniqueID : string"`, with a ` : <type>` suffix that must be stripped).
+   - `element.textOffset` is `0` and `nameIdentifier` is `null`, so any position resolution that depends only on PSI offsets returns `null`. A whole-document regex scan for the identifier is the proven fallback (see `FindClassTool.resolveOffset` and `OptimizedSymbolSearch.resolveOffset`).
+   - `RiderNavigationProbe.probe(item, project)` works in many code paths but returns `null` for items obtained from secondary `PopupFaithfulSymbolSearch` invocations — don't rely on it as the sole fallback.
+   - **Container/parent walks** (`element.parent` chain looking for a class node) return `null` for these proxies. Filename-based inference (`virtualFile.nameWithoutExtension`) is the Unity-idiomatic fallback because Unity codebases follow one-class-per-file.
+   - **Supertype walks** via `PlatformFallbacks.getTypeHierarchy` return no supertypes for RD proxies. Textual regex of the class declaration line (`(class|struct|interface) Name … : Base1, Base2`) is the working fallback; recurse through the class popup to walk further.
+
+   **The structural rule:** when a new helper needs to resolve a name, position, container, or hierarchy from a Rider PSI element, **reuse the proven fallback chain** from `FindClassTool` / `OptimizedSymbolSearch` (and shared helpers like `RiderNavigationProbe`). Do NOT write a parallel "close-but-not-equal" copy that's missing one fallback — that's how 0.4.5→0.4.13 happened (`QualifiedMemberResolver` reimplemented `resolveOffset`, `extractContainerName`, and the name-extraction chain without the document-regex fallback, and each missing piece took a separate release to diagnose). When you find yourself copying these patterns, factor the shared logic into a helper module instead.
+
 ## Build Commands
 
 Both variants ship from the same `build/distributions/` folder and MUST share the same version number:

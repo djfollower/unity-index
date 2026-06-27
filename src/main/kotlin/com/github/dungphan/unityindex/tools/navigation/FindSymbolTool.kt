@@ -152,7 +152,9 @@ class FindSymbolTool : AbstractMcpTool() {
                 searchExtender = searchExtender,
                 psiModCount = PsiModificationTracker.getInstance(project).modificationCount,
                 projectBasePath = ProjectResolver.normalizePath(project.basePath ?: ""),
-                metadata = mapOf("query" to query)
+                metadata = buildMap {
+                    put("query", query)
+                }
             )
         }
 

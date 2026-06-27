@@ -10,6 +10,7 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VfsUtilCore
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
@@ -115,14 +116,17 @@ object QualifiedMemberResolver {
             LOG.debug("Class popup lookup for '$shortType' failed: ${e.message}", e)
             return null
         }
-        val typeElement = typeCandidates
-            .mapNotNull { extractPsiElement(it.item) }
-            .firstOrNull { (it as? PsiNamedElement)?.name == shortType || tryGetName(it) == shortType }
-            ?: typeCandidates.firstOrNull()?.item?.let { extractPsiElement(it) }
+        val typeCandidate = typeCandidates
+            .firstOrNull { c ->
+                val el = extractPsiElement(c.item) ?: return@firstOrNull false
+                (el as? PsiNamedElement)?.name == shortType || tryGetName(el) == shortType
+            }
+            ?: typeCandidates.firstOrNull()
             ?: return null
+        val typeElement = extractPsiElement(typeCandidate.item) ?: return null
 
         // Step 2 — collect ancestor type names (Type + supertypes).
-        val ancestorNames = collectAncestorNames(typeElement, project)
+        val ancestorNames = collectAncestorNames(typeElement, typeCandidate.item, project)
         if (ancestorNames.isEmpty()) return null
 
         // Step 3 — search for Member alone, filter to candidates declared on any ancestor.
@@ -137,9 +141,19 @@ object QualifiedMemberResolver {
             val item = candidate.item
             val element = extractPsiElement(item) ?: return@mapNotNull null
             val target = element.navigationElement ?: element
-            val actualName = (target as? PsiNamedElement)?.name ?: tryGetName(target)
+            // Try every name source: PSI named element → reflection → NavigationItem.name. Rider
+            // RD-backed proxies often return null/blank from the PSI side, so the popup display
+            // name ("UniqueID : string") is the only thing carrying the identifier — strip the
+            // type suffix and use that.
+            val actualName = stripTypeSuffix((target as? PsiNamedElement)?.name)
+                ?: stripTypeSuffix(tryGetName(target))
+                ?: stripTypeSuffix(item.name)
             if (actualName != memberName) return@mapNotNull null
-            val containerName = extractContainerName(target) ?: return@mapNotNull null
+            // Rider RD-backed C# proxies don't surface a PSI parent class — fall back to the
+            // owning filename, resolved via RiderNavigationProbe when PSI containingFile is null.
+            val containerName = extractContainerName(target)
+                ?: resolveVirtualFile(item, target, project)?.nameWithoutExtension
+                ?: return@mapNotNull null
             val ancestorIndex = ancestorNames.indexOf(containerName)
             if (ancestorIndex < 0) return@mapNotNull null
             CandidateMatch(
@@ -151,6 +165,19 @@ object QualifiedMemberResolver {
                 requestedMember = memberName
             )
         }.minByOrNull { it.depth }
+    }
+
+    private fun resolveVirtualFile(item: NavigationItem, target: PsiElement, project: Project): VirtualFile? {
+        target.containingFile?.virtualFile?.let { return it }
+        target.navigationElement?.containingFile?.virtualFile?.let { return it }
+        return RiderNavigationProbe.probe(item, project)?.file
+    }
+
+    /** Rider's symbol popup returns names like "UniqueID : string" for C# fields. Strip the suffix. */
+    private fun stripTypeSuffix(name: String?): String? {
+        if (name == null) return null
+        val colon = name.indexOf(" : ")
+        return if (colon > 0) name.substring(0, colon).trim() else name.trim()
     }
 
     private data class CandidateMatch(
@@ -166,7 +193,7 @@ object QualifiedMemberResolver {
      * Returns [Type, Supertype1, Supertype2, ...] ordered by depth from Type.
      * First element is always the type's own name so direct declarations are preferred.
      */
-    private fun collectAncestorNames(typeElement: PsiElement, project: Project): List<String> {
+    private fun collectAncestorNames(typeElement: PsiElement, typeItem: NavigationItem, project: Project): List<String> {
         val ordered = mutableListOf<String>()
         val seen = mutableSetOf<String>()
 
@@ -185,7 +212,78 @@ object QualifiedMemberResolver {
             val simple = supertype.name.substringAfterLast('.')
             if (seen.add(simple)) ordered.add(simple)
         }
+
+        // Fallback: PlatformFallbacks.getTypeHierarchy returns no supertypes for Rider RD-backed
+        // C# elements (their PSI surface isn't a standard PsiClass). Scan the type's containing
+        // file textually for `class Type : Base1, Base2 { ... }`, then recursively resolve those
+        // base names through the class popup. Cheap and good enough for one-class-per-file Unity.
+        if (ordered.size == 1 && typeName != null) {
+            try {
+                addTextualSupertypes(typeElement, typeItem, typeName, project, ordered, seen)
+            } catch (e: Exception) {
+                LOG.debug("Textual supertype scan failed: ${e.message}", e)
+            }
+        }
         return ordered
+    }
+
+    private fun addTextualSupertypes(
+        typeElement: PsiElement,
+        typeItem: NavigationItem,
+        typeName: String,
+        project: Project,
+        ordered: MutableList<String>,
+        seen: MutableSet<String>
+    ) {
+        val toResolve = ArrayDeque<String>()
+        parseDeclaredBases(typeElement, typeItem, typeName, project)?.forEach { toResolve.addLast(it) }
+        while (toResolve.isNotEmpty() && ordered.size < SUPERTYPE_WALK_LIMIT) {
+            val baseName = toResolve.removeFirst()
+            if (!seen.add(baseName)) continue
+            ordered.add(baseName)
+            // Resolve baseName via the class popup so we can recurse into its declared bases too.
+            val baseCandidate = try {
+                PopupFaithfulSymbolSearch.searchClasses(
+                    project,
+                    baseName,
+                    com.intellij.psi.search.GlobalSearchScope.allScope(project),
+                    CLASS_LOOKUP_LIMIT
+                ).candidates.firstOrNull { c ->
+                    val el = extractPsiElement(c.item) ?: return@firstOrNull false
+                    (el as? PsiNamedElement)?.name == baseName || tryGetName(el) == baseName
+                }
+            } catch (_: Exception) {
+                continue
+            } ?: continue
+            val baseElement = extractPsiElement(baseCandidate.item) ?: continue
+            parseDeclaredBases(baseElement, baseCandidate.item, baseName, project)?.forEach { toResolve.addLast(it) }
+        }
+    }
+
+    private fun parseDeclaredBases(
+        typeElement: PsiElement,
+        typeItem: NavigationItem,
+        typeName: String,
+        project: Project
+    ): List<String>? {
+        // Read source text. PSI-based reads fail for Rider RD-backed proxies (their containingFile
+        // surface has no usable text), so fall back to VirtualFile bytes via RiderNavigationProbe.
+        val nav = typeElement.navigationElement ?: typeElement
+        val psiText = nav.containingFile?.text ?: typeElement.containingFile?.text
+        val text = psiText ?: run {
+            val virtualFile = resolveVirtualFile(typeItem, typeElement, project) ?: return null
+            try { VfsUtilCore.loadText(virtualFile) } catch (_: Exception) { null }
+        } ?: return null
+        // class|struct|interface Name [<generics>] : Base1, Base2, ...
+        val pattern = Regex(
+            """\b(?:class|struct|interface)\s+""" + Regex.escape(typeName) +
+                """(?:\s*<[^>]*>)?\s*:\s*([^{\n]+)"""
+        )
+        val match = pattern.find(text) ?: return null
+        val baseList = match.groupValues[1]
+        return baseList.split(',')
+            .map { it.trim().substringBefore('<').substringAfterLast('.') }
+            .filter { it.isNotEmpty() && it.first().isUpperCase() }
     }
 
     private fun extractPsiElement(item: NavigationItem): PsiElement? {
@@ -228,8 +326,13 @@ object QualifiedMemberResolver {
         languageFilter: Set<String>?,
         resolvedFrom: ResolvedFrom
     ): SymbolMatch? {
-        val name = (target as? PsiNamedElement)?.name ?: tryGetName(target) ?: return null
-        val position = resolvePosition(item, target, project) ?: return null
+        // Same fallback chain as findBestCandidate — Rider RD proxies return null from the PSI
+        // name accessors, so the popup display name is the only carrier of the identifier.
+        val name = stripTypeSuffix((target as? PsiNamedElement)?.name)
+            ?: stripTypeSuffix(tryGetName(target))
+            ?: stripTypeSuffix(item.name)
+            ?: return null
+        val position = resolvePosition(item, target, project, identifierHint = name) ?: return null
         if (!scope.contains(position.file)) return null
 
         val language = when (target.language.id) {
@@ -262,15 +365,22 @@ object QualifiedMemberResolver {
 
     private data class ResolvedPosition(val file: VirtualFile, val line: Int, val column: Int)
 
-    private fun resolvePosition(item: NavigationItem, target: PsiElement, project: Project): ResolvedPosition? {
+    private fun resolvePosition(
+        item: NavigationItem,
+        target: PsiElement,
+        project: Project,
+        identifierHint: String?
+    ): ResolvedPosition? {
         val virtualFile = target.containingFile?.virtualFile
         if (virtualFile != null) {
             val document = getDocument(project, target)
-            val offset = document?.let { resolveOffset(target, it) }
-            if (document != null && offset != null) {
-                val lineIndex = document.getLineNumber(offset)
-                val column = offset - document.getLineStartOffset(lineIndex) + 1
-                return ResolvedPosition(virtualFile, lineIndex + 1, column)
+            if (document != null) {
+                val offset = resolveOffset(target, document, identifierHint)
+                if (offset != null) {
+                    val lineIndex = document.getLineNumber(offset)
+                    val column = offset - document.getLineStartOffset(lineIndex) + 1
+                    return ResolvedPosition(virtualFile, lineIndex + 1, column)
+                }
             }
         }
         val probe = RiderNavigationProbe.probe(item, project) ?: return null
@@ -283,12 +393,24 @@ object QualifiedMemberResolver {
             ?: psiFile.virtualFile?.let { FileDocumentManager.getInstance().getDocument(it) }
     }
 
-    private fun resolveOffset(element: PsiElement, document: Document): Int? {
+    private fun resolveOffset(element: PsiElement, document: Document, identifierHint: String? = null): Int? {
         val nameIdentifierOffset = (element as? PsiNameIdentifierOwner)?.nameIdentifier?.textOffset
         if (nameIdentifierOffset != null && nameIdentifierOffset > 0) return nameIdentifierOffset
         val offset = element.textOffset
         if (offset > 0) return offset
-        return null
+
+        // Rider's ProtocolNavigationItem reports textOffset=0 and has no nameIdentifier. Fall back
+        // to a whole-document regex scan keyed on the identifier name — same approach used by
+        // FindClassTool.resolveOffset and OptimizedSymbolSearch.resolveOffset for Rider RD proxies.
+        val rawName = identifierHint
+            ?: (element as? PsiNamedElement)?.name
+            ?: tryGetName(element)
+        val cleanName = stripTypeSuffix(rawName) ?: rawName
+        if (cleanName.isNullOrBlank()) return null
+        val identifier = cleanName.substringBefore('(').substringBefore(':').trim()
+        if (identifier.isEmpty() || identifier.length < 2) return null
+        val pattern = Regex("\\b${Regex.escape(identifier)}\\b")
+        return pattern.find(document.text)?.range?.first
     }
 
     /**

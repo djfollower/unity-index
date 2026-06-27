@@ -82,9 +82,16 @@ object OptimizedSymbolSearch {
                 val results = (symbolResults + classResults)
                     .distinctBy { "${it.file}:${it.line}:${it.column}:${it.name}" }
 
-                if (results.size >= limit || popupResults.candidates.size < popupLimit || popupLimit >= popupLimitCap) {
+                if (results.isNotEmpty() && (results.size >= limit || popupResults.candidates.size < popupLimit || popupLimit >= popupLimitCap)) {
                     LOG.debug("Found ${results.size} symbols via popup-backed search (symbols=${symbolResults.size}, classes=${classResults.size})")
                     return results.take(limit)
+                }
+                if (results.isEmpty() && (popupResults.candidates.size < popupLimit || popupLimit >= popupLimitCap)) {
+                    // Popup-backed paths returned nothing AND have nothing more to give. Drop to the
+                    // contributor-iteration fallback — that's the same approach FindClassTool uses
+                    // and it reliably reaches Rider's C# symbol contributors.
+                    LOG.debug("Popup-backed search produced 0 results for '$pattern', falling back to legacySearch")
+                    break
                 }
 
                 popupLimit = minOf(popupLimitCap, popupLimit * 2)
@@ -111,7 +118,9 @@ object OptimizedSymbolSearch {
         val matcher = createMatcher(pattern)
         val nameFilter = createNameFilter(pattern, matcher)
 
-        for (contributor in ChooseByNameContributor.SYMBOL_EP_NAME.extensionList) {
+        val contributors = ChooseByNameContributor.SYMBOL_EP_NAME.extensionList +
+            ChooseByNameContributor.CLASS_EP_NAME.extensionList
+        for (contributor in contributors) {
             if (results.size >= limit) break
 
             try {
@@ -382,20 +391,25 @@ object OptimizedSymbolSearch {
         if (rawName != null && rawName.length > 1) {
             val identifier = rawName.substringBefore('(').substringBefore(':').trim()
             if (identifier.isNotEmpty()) {
-                // Scope the regex search to the element's own text range — searching the whole
-                // document would otherwise return the first occurrence anywhere in the file,
-                // including inside earlier string literals, comments, or attribute arguments.
+                val identifierPattern = Regex("\\b${Regex.escape(identifier)}\\b")
+                // Prefer the element's own text range — searching the whole document would
+                // otherwise return the first occurrence anywhere in the file, including inside
+                // earlier string literals, comments, or attribute arguments.
                 val elementRange = element.textRange
                 if (elementRange != null && elementRange.length > 0) {
                     val rangeStart = elementRange.startOffset.coerceAtLeast(0)
                     val rangeEnd = elementRange.endOffset.coerceAtMost(document.textLength)
                     if (rangeStart < rangeEnd) {
                         val haystack = document.getText(com.intellij.openapi.util.TextRange(rangeStart, rangeEnd))
-                        val identifierPattern = Regex("\\b${Regex.escape(identifier)}\\b")
                         val match = identifierPattern.find(haystack)
                         if (match != null) return rangeStart + match.range.first
                     }
                 }
+                // Rider RD-backed proxies report empty textRange; fall back to a whole-document
+                // scan so the symbol still emerges with a real line/column. Matches
+                // FindClassTool.resolveOffset which is the proven path for these proxies.
+                val match = identifierPattern.find(document.text)
+                if (match != null) return match.range.first
             }
         }
         return null

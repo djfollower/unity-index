@@ -21,6 +21,20 @@ import { symbolKindName } from "../tools/abstractTool";
  *   3. Search for the member alone; keep candidates whose containerName matches the type or any
  *      reachable supertype.
  *   4. Return the closest match — direct on Type, else nearest base — annotated with ResolvedFrom.
+ *
+ * Known structural risks (unimplemented by design, but here's where the next maintainer adds them
+ * if Roslyn LSP starts misbehaving):
+ *
+ *   - `containerName` null/empty → candidate dropped silently (see `if (!container) continue` in
+ *     resolveInheritedMember). The Kotlin sibling falls back to `virtualFile.nameWithoutExtension`
+ *     (Unity one-class-per-file convention). If C# Dev Kit ever returns workspace symbols without
+ *     `containerName`, add the same filename-basename fallback here using `sym.location.uri`.
+ *
+ *   - `prepareTypeHierarchy` returns empty → `ancestorNames` collapses to `[shortType]` only and
+ *     no inherited member can match. Kotlin sibling falls back to textually scanning the type's
+ *     containing file for `class Name : Base1, Base2`. If this gap surfaces (early C# Dev Kit
+ *     load, language servers without type hierarchy), port the textual scan from
+ *     QualifiedMemberResolver.kt#addTextualSupertypes / parseDeclaredBases.
  */
 
 const CLASS_KINDS = new Set<vscode.SymbolKind>([
