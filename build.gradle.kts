@@ -72,6 +72,35 @@ intellijPlatform {
     }
 }
 
+// Graph webview bundle: build via npm workspaces (Vite + Svelte + Sigma) and
+// sync into src/main/resources/graph/ so the plugin jar contains it. The
+// GraphSchemeHandlerFactory streams files out of that resource dir at runtime.
+val isWindowsOs = org.gradle.internal.os.OperatingSystem.current().isWindows
+val npmExecutable = if (isWindowsOs) "npm.cmd" else "npm"
+
+val buildGraphWebview by tasks.registering(Exec::class) {
+    workingDir = rootDir
+    // Inputs: every file that affects the bundle output. Excludes dist/ and
+    // node_modules/ to avoid cycles and ignore caches.
+    inputs.files(
+        fileTree("graph/webview") {
+            exclude("dist", "node_modules", "*.log")
+        },
+        fileTree("graph/core/src"),
+    ).withPropertyName("graphWebviewSources")
+    inputs.file("package.json").withPropertyName("rootPackageJson")
+    inputs.file("package-lock.json").withPropertyName("rootPackageLock")
+    outputs.dir("graph/webview/dist").withPropertyName("graphWebviewDist")
+
+    commandLine(npmExecutable, "-w", "@unity-index/graph-webview", "run", "build")
+}
+
+val copyGraphBundle by tasks.registering(Sync::class) {
+    dependsOn(buildGraphWebview)
+    from(layout.projectDirectory.dir("graph/webview/dist"))
+    into(layout.projectDirectory.dir("src/main/resources/graph"))
+}
+
 tasks {
     wrapper {
         gradleVersion = providers.gradleProperty("gradleVersion").get()
@@ -88,6 +117,7 @@ tasks {
     // hand-edit the constant on every release. Drift-proof — same source of
     // truth as the artifact filename.
     processResources {
+        dependsOn(copyGraphBundle)
         val pluginVersion = providers.gradleProperty("pluginVersion")
         inputs.property("pluginVersion", pluginVersion)
         filesMatching("version.properties") {

@@ -12,8 +12,17 @@ docs/superpowers
 .idea/
 scripts/build-install.sh
 
+# npm workspaces
+node_modules/
+
 # vscode-extension
-vscode-extension/node_modules/
 vscode-extension/dist/
 vscode-extension/*.vsix
 vscode-extension/.vscode-test/
+
+# graph webview build output
+graph/webview/dist/
+graph/core/dist/
+
+# Graph bundle copied into the Rider plugin jar (built artifact, never committed)
+src/main/resources/graph/

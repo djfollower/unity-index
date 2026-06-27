@@ -46,6 +46,9 @@ import { FindAssetReferencesTool } from "./tools/unity/findAssetReferencesTool";
 // Batch dispatcher
 import { BatchTool } from "./tools/batchTool";
 
+// Graph webview
+import { GraphPanel } from "./graphHost/graphPanel";
+
 interface RunningServer {
   http: HttpServer;
   readiness: ReadinessGate;
@@ -190,6 +193,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand("unityIndex.showLogs", () => {
       output?.show();
+    }),
+    vscode.commands.registerCommand("unityIndex.openGraph", () => {
+      GraphPanel.reveal(context.extensionUri, log);
     }),
   );
 

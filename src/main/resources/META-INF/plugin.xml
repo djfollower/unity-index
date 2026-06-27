@@ -46,6 +46,12 @@ instead of raw text grep, dramatically reducing token usage and improving AI age
 
         <!-- Notification Group -->
         <notificationGroup id="Unity Index MCP Server" displayType="BALLOON"/>
+
+        <!-- Graph viewer tool window (Day 1: 3 hardcoded nodes via Sigma) -->
+        <toolWindow id="Unity Index Graph"
+                    anchor="right"
+                    icon="AllIcons.Toolwindows.WebToolWindow"
+                    factoryClass="com.github.dungphan.unityindex.graph.GraphToolWindowFactory"/>
     </extensions>
 
     <!-- Extension Point for Custom Tools -->

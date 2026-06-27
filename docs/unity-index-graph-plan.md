@@ -28,8 +28,9 @@ Three tracks. No implementation. Each produces a doc that later days build again
 - **UI framework: Svelte.** ~15KB runtime, compiles away, reactivity model fits Days 5/6/11 (filters, breadcrumbs, saved views) at roughly half the code of React. React was the safe default; Svelte wins on bundle size and ergonomics for a single-panel UI. Vanilla TS rejected — too much DOM bookkeeping for the roadmap.
 
 #### Build + module setup
-- **Build tooling: Vite.** Standard for webview bundles, fast dev loop, simple production output. Vite output target pinned to **ES2022** (both VS Code webviews and IntelliJ JCEF run modern Chromium).
-- **Package manager: npm workspaces.** Root `package.json` with workspaces for `vscode-extension/`, `graph/core/`, `graph/webview/`, `graph/vscode-bridge/`. Single `package-lock.json`. Minimizes churn against existing `vscode-extension/` setup. pnpm was tempting but adds a new tool to install.
+- **Build tooling: Vite.** Standard for webview bundles, fast dev loop, simple production output. Vite output target pinned to **ES2022** (both VS Code webviews and IntelliJ JCEF run modern Chromium). Vite `base: './'` is mandatory — both hosts serve the bundle from a non-root path (VS Code: `vscode-webview://…/dist/graph/`, Rider: `unityindex://graph/`) and absolute `/assets/...` paths break under both.
+- **Package manager: npm workspaces.** Root `package.json` with workspaces for `vscode-extension/`, `graph/core/`, `graph/webview/`. Single `package-lock.json`. Minimizes churn against existing `vscode-extension/` setup. pnpm was tempting but adds a new tool to install.
+  - **`graph/rider-bridge/` and `graph/vscode-bridge/` are deliberately NOT npm workspace packages.** They are plain source dirs imported directly by the extensions. Reason: vsce + npm-workspace symlinks interact badly (vsce historically skips or fails on symlinked `node_modules/` entries), and the blessed monorepo fix — bundling the extension with esbuild + `vsce package --no-dependencies` — is out of scope for the Day 1 "open a panel" milestone. Revisit if/when a bridge grows real npm dependencies.
 - **Module format.** Webview bundle stays ESM (browser runtime). Extension host code stays CJS (VS Code extension convention). Don't mix.
 - **Versioning.** All `graph/*` packages marked `"private": true`; version field stays mirrored to `gradle.properties.pluginVersion` via the same convention the existing `vscode-extension/package.json` already follows. Never published to npm.
 
@@ -46,10 +47,18 @@ graph/
 - **Abstraction in `graph/core/host-bridge.ts`.** Single interface (`postToHost`, `onFromHost`) implemented twice: VS Code (`acquireVsCodeApi` + `window.message`) and Rider (`JBCefJSQuery` for JS→Kotlin, injected `window.unityIndex.fromHost` for Kotlin→JS). The webview Svelte code never imports either directly — it sees only the abstraction.
 - **MCP routing in-process.** Both bridges call the local MCP tool registry directly inside the extension host process rather than going back over HTTP/SSE. External MCP clients (e.g. Claude Code) still use the HTTP route; the wire shape is identical.
 
+#### Webview asset loading (per host)
+- **VS Code: `asWebviewUri` + CSP-injecting HTML transformer.** The shipped `index.html` cannot be served verbatim — VS Code webviews enforce CSP and require resource URIs to be rewritten through `webview.asWebviewUri(...)`. `graph/vscode-bridge/` owns a small HTML transformer (run at panel-load time) that:
+  - rewrites every `src=` / `href=` to the `webview.asWebviewUri` form,
+  - injects a `<meta http-equiv="Content-Security-Policy">` tag with `default-src 'none'; script-src ${cspSource}; style-src ${cspSource}; img-src ${cspSource} data: blob:; font-src ${cspSource}; connect-src ${cspSource}; worker-src ${cspSource} blob:;` (the `data:` allowance is required by Sigma's canvas sprite atlas; `worker-src blob:` is pre-emptive for Day 7's layout worker).
+  - The webview never loads remote origins — `connect-src` deliberately omits `https:`.
+- **Rider: custom JCEF scheme handler.** Loading the bundle via `jar:file://` does NOT work — `jar:` URLs are opaque-origin in Chromium and ESM module loading fails CORS. Instead, `graph/rider-bridge/` registers a `JBCefApp.getInstance().registerSchemeHandlerFactory("unityindex", "graph", …)` at plugin startup that streams resources out of the classloader (`getResourceAsStream("/graph/...")`). The browser loads `unityindex://graph/index.html`, sees a normal HTTP-like origin, and ESM + relative imports + CSP behave like in any browser.
+  - Must guard with `JBCefApp.isSupported()`; older JetBrains Runtimes without JCEF show a friendly "JCEF unavailable" message in the tool window instead of crashing.
+
 #### Asset pipeline into shipped artifacts
-- **Vite output** → `graph/webview/dist/`.
+- **Vite output** → `graph/webview/dist/` (with `base: './'` so all asset paths are relative).
 - **VS Code build** copies it into `vscode-extension/dist/graph/` as part of `npm run package` (extend `vscode-extension/scripts/package.js`). Lands in the VSIX.
-- **Rider build** copies it into `src/main/resources/graph/` as a Gradle task wired before `processResources`. Lands in the plugin zip.
+- **Rider build** copies it into `src/main/resources/graph/` as a Gradle task wired before `processResources`. Lands in the plugin zip and is served by the custom scheme handler at runtime.
 - Build commands stay as documented in `CLAUDE.md` (`./gradlew buildPlugin`, `npm run package`) — they pull the bundle implicitly.
 
 #### Testing
@@ -100,13 +109,21 @@ Lock input/output schemas, error envelopes, and which tools are Phase 1 vs Phase
 
 ## Day 1 — Webview skeleton in both extensions
 
-**Goal:** an empty panel opens in Rider and VS Code, shows a hardcoded "hello graph" with 3 nodes.
+**Goal:** an empty panel opens in Rider and VS Code, shows a hardcoded "hello graph" with 3 nodes via **Sigma.js + Graphology** (per Day 0.A — supersedes earlier Cytoscape mentions in this section).
 
-- VS Code: register `unityIndex.graph` webview view in sidebar; load Vite bundle.
-- Rider: register tool window with embedded JCEF browser; load the same Vite bundle.
-- Webview ↔ extension postMessage bridge (TS) and JS↔Kotlin bridge (Rider).
-- Cytoscape boots, renders three dummy nodes.
-- Lockstep version bump.
+- Root `package.json` declares npm workspaces `["vscode-extension", "graph/core", "graph/webview"]`. `graph/rider-bridge/` and `graph/vscode-bridge/` stay as plain source dirs (see Day 0.A package-manager note).
+- `graph/core/`: `host-bridge.ts` interface + shared message types. No host code.
+- `graph/webview/`: Vite + Svelte + Sigma + Graphology, `base: './'`, renders 3 hardcoded nodes + 2 edges. Bridge implementation picked at boot by sniffing `acquireVsCodeApi` vs `window.unityIndex`.
+- VS Code:
+  - Register `unityIndex.graph` webview view in sidebar + `unityIndex.openGraph` command.
+  - Implement the **CSP-injecting HTML transformer** in `graph/vscode-bridge/` (see Day 0.A "Webview asset loading"). The transformer is a Day 1 deliverable, not an afterthought — without it the bundle won't load.
+  - Extend `vscode-extension/scripts/package.js` to build `graph/webview` and copy `dist/` into `vscode-extension/dist/graph/` before VSIX assembly.
+- Rider:
+  - Register tool window in `plugin.xml` (right anchor).
+  - Implement the **custom JCEF scheme handler** (`unityindex://graph/`) in `graph/rider-bridge/`, registered at plugin startup, streaming from the classloader (see Day 0.A). Guard with `JBCefApp.isSupported()`; fall back to a friendly message in the tool window when JCEF is missing.
+  - Gradle task `copyGraphBundle` runs `npm -w graph/webview run build` and copies the dist into `src/main/resources/graph/`; wire as a `processResources` dependency.
+- Webview ↔ extension postMessage bridge (TS) and JS↔Kotlin bridge (Rider), both implementing `host-bridge.ts`. Round-trip a "hello" message on mount to prove the bridge end-to-end before declaring Day 1 done.
+- Lockstep version bump: `gradle.properties#pluginVersion` and `vscode-extension/package.json#version` together; mirror the same version into new `graph/*` package.json files.
 
 **Dependency:** none. **Validates:** webview plumbing + lockstep build pipeline.
 

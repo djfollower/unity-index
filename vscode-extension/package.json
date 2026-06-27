@@ -40,6 +40,10 @@
       {
         "command": "unityIndex.showLogs",
         "title": "Unity Index: Show Logs"
+      },
+      {
+        "command": "unityIndex.openGraph",
+        "title": "Unity Index: Open Graph"
       }
     ],
     "configuration": {
