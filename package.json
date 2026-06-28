@@ -1,6 +1,6 @@
 {
   "name": "unity-index-monorepo",
-  "version": "0.4.15",
+  "version": "0.5.0",
   "private": true,
   "description": "Workspace root for the Unity Index MCP server (Rider plugin + VS Code extension) and the unity-index-graph webview.",
   "workspaces": [

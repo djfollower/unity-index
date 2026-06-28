@@ -10,10 +10,6 @@ import com.intellij.ui.jcef.JBCefJSQuery
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import org.cef.browser.CefBrowser
-import org.cef.browser.CefFrame
-import org.cef.handler.CefLoadHandlerAdapter
-
 // Per-browser JS↔Kotlin bridge for the graph webview.
 //
 // Wire format mirrors graph/core/src/host-bridge.ts: messages are JSON-
@@ -45,41 +41,36 @@ class GraphHostBridge(
             }
             null
         }
-
-        browser.jbCefClient.addLoadHandler(
-            object : CefLoadHandlerAdapter() {
-                override fun onLoadEnd(
-                    cefBrowser: CefBrowser?,
-                    frame: CefFrame?,
-                    httpStatusCode: Int,
-                ) {
-                    if (frame?.isMain == true) {
-                        injectBridge()
-                    }
-                }
-            },
-            browser.cefBrowser,
-        )
     }
 
     override fun dispose() {
         query.dispose()
     }
 
-    private fun injectBridge() {
-        // window.unityIndex must exist before the webview's bridge picker
-        // runs. Use addLoadHandler.onLoadEnd which fires before the page's
-        // module scripts get executed in a typical Vite bundle; if a race
-        // surfaces we can switch to onBeforeLoad / domContentLoaded.
+    // Returns the HTML with a <script> stub injected into <head> that creates
+    // window.unityIndex BEFORE the bundle's module script runs. Required
+    // because the webview's pickBridge() sniffs `window.unityIndex` at mount
+    // time — using onLoadEnd to wire it up loses the race (module scripts
+    // execute before onLoadEnd fires).
+    fun injectIntoHtml(html: String): String {
         val postToHost = query.inject("json")
-        val script = """
-            (function() {
-              window.unityIndex = window.unityIndex || {};
-              window.unityIndex.postToHost = function(json) { $postToHost };
-              window.dispatchEvent(new Event('unity-index-host-ready'));
-            })();
+        // VS Code uses nonce="..." but Rider's loadHTML has no CSP, so the
+        // inline script runs unconditionally.
+        val stub = """
+            <script>
+              window.unityIndex = {
+                postToHost: function(json) { $postToHost },
+                fromHost: undefined
+              };
+            </script>
         """.trimIndent()
-        browser.cefBrowser.executeJavaScript(script, browser.cefBrowser.url, 0)
+        val headOpen = Regex("<head\\b[^>]*>", RegexOption.IGNORE_CASE).find(html)
+        return if (headOpen != null) {
+            val insertAt = headOpen.range.last + 1
+            html.substring(0, insertAt) + "\n" + stub + html.substring(insertAt)
+        } else {
+            stub + html
+        }
     }
 
     private fun handleIncoming(envJson: String) {

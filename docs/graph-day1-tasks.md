@@ -90,7 +90,8 @@ Same folder-layout deviation as Task 4 applies: Kotlin code lives in `src/main/k
 **Files in `src/main/kotlin/com/github/dungphan/unityindex/graph/`:**
 - `GraphBridgeProtocol.kt` — `BridgeEnvelope` / `BridgeError` (kotlinx.serialization) matching `graph/core/src/host-bridge.ts`. `GraphWireTypes.HELLO = "unity_graph_hello"` mirrors `graph/core/src/messages.ts`.
 - `GraphHostHandlers.kt` — dispatch table. Day 1 handles only `HELLO`, returns `{ greeting, host: "rider" }`.
-- `GraphHostBridge.kt` — per-browser JS↔Kotlin bridge. `JBCefJSQuery.create(browser as JBCefBrowserBase)` (the non-deprecated overload). `addLoadHandler.onLoadEnd` injects `window.unityIndex = { postToHost(json) { <query.inject('json')> } }`. Incoming envelopes dispatched off the EDT via `executeOnPooledThread`; responses sent back as `window.unityIndex.fromHost("<json-quoted-string>")` via `executeJavaScript`.
+- `GraphHostBridge.kt` — per-browser JS↔Kotlin bridge. `JBCefJSQuery.create(browser as JBCefBrowserBase)` (the non-deprecated overload). Exposes `injectIntoHtml(html)` which prepends a `<script>` stub into `<head>` defining `window.unityIndex = { postToHost(json) { <query.inject('json')> }, fromHost: undefined }`. Incoming envelopes dispatched off the EDT via `executeOnPooledThread`; responses sent back as `window.unityIndex.fromHost("<json-quoted-string>")` via `executeJavaScript`.
+  - **Gotcha caught at smoke test:** the bridge stub MUST be injected into the HTML before `loadHTML`, not via a post-load `executeJavaScript`. First attempt used `addLoadHandler.onLoadEnd` to inject — but the bundle's module script (which calls `pickBridge()` and reads `window.unityIndex` synchronously) runs *before* `onLoadEnd` fires. Result: the webview saw no `unityIndex` and fell back to the noop bridge, reporting `standalone (no host)` in the status bar despite Kotlin happily registering itself afterwards. Pre-load HTML injection wins the race deterministically. `GraphToolWindowFactory.createBrowserPanel` calls `browser.loadHTML(bridge.injectIntoHtml(html))`.
 - `GraphToolWindowFactory.kt` — `JBCefApp.isSupported()` guard with friendly fallback; bundle-missing fallback; `JBCefBrowser().loadHTML(htmlReadFromClasspath)`. Implements `DumbAware`.
 
 **`plugin.xml`:** added `<toolWindow id="Unity Index Graph" anchor="right" icon="AllIcons.Toolwindows.WebToolWindow" factoryClass="...GraphToolWindowFactory"/>`.
@@ -100,7 +101,7 @@ Same folder-layout deviation as Task 4 applies: Kotlin code lives in `src/main/k
 - `copyGraphBundle` (Sync): depends on `buildGraphWebview`, syncs `graph/webview/dist/` → `src/main/resources/graph/`. Sync (not Copy) so removed files don't pile up.
 - `processResources` gets `dependsOn(copyGraphBundle)`, so the bundle is in place before the jar is built. `src/main/resources/graph/` is added to `.gitignore` — it's a build artifact.
 
-**Smoke test:** `./gradlew buildPlugin` → install `build/distributions/unity-index-rider-0.4.15.zip` → open the "Unity Index Graph" tool window → see 3 nodes + hello round-trip.
+**Smoke test:** `./gradlew buildPlugin` → install `build/distributions/unity-index-rider-0.5.0.zip` → open the "Unity Index Graph" tool window → see 3 nodes + hello round-trip.
 
 ---
 

@@ -64,7 +64,11 @@ class GraphToolWindowFactory : ToolWindowFactory, DumbAware {
         // bundle is produced by vite-plugin-singlefile so everything is
         // inline — no external asset URLs to resolve. See plan §Day 0.A
         // "Webview asset loading".
-        browser.loadHTML(html)
+        //
+        // Inject the bridge stub into <head> BEFORE loadHTML so window.
+        // unityIndex exists when the bundle's pickBridge() runs at module
+        // load — otherwise the webview falls back to the noop bridge.
+        browser.loadHTML(bridge.injectIntoHtml(html))
         return browser.component
     }
 
