@@ -34,4 +34,9 @@ object GraphWireTypes {
     const val OPEN_FILE = "unity_graph_open_file"
     const val FIND_USAGES = "unity_graph_find_usages"
     const val REVEAL_IN_EXPLORER = "unity_graph_reveal_in_explorer"
+
+    // Day 5 filter state persistence — mirrors of graph/core/src/messages.ts
+    // GET_FILTER_STATE_TYPE / SET_FILTER_STATE_TYPE.
+    const val GET_FILTER_STATE = "unity_graph_get_filter_state"
+    const val SET_FILTER_STATE = "unity_graph_set_filter_state"
 }

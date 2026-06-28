@@ -18,6 +18,11 @@ export type {
   FindUsagesResponse,
   RevealInExplorerRequest,
   RevealInExplorerResponse,
+  FilterState,
+  GetFilterStateRequest,
+  GetFilterStateResponse,
+  SetFilterStateRequest,
+  SetFilterStateResponse,
 } from './messages.js';
 export {
   HELLO_GRAPH_TYPE,
@@ -25,6 +30,8 @@ export {
   OPEN_FILE_TYPE,
   FIND_USAGES_TYPE,
   REVEAL_IN_EXPLORER_TYPE,
+  GET_FILTER_STATE_TYPE,
+  SET_FILTER_STATE_TYPE,
 } from './messages.js';
 
 export type {

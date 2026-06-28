@@ -11,14 +11,18 @@
 // because graph-core ships ESM and this extension is CJS.
 
 import type {
+  FilterState,
   FindUsagesRequest,
   FindUsagesResponse,
+  GetFilterStateResponse,
   HelloGraphRequest,
   HelloGraphResponse,
   OpenFileRequest,
   OpenFileResponse,
   RevealInExplorerRequest,
   RevealInExplorerResponse,
+  SetFilterStateRequest,
+  SetFilterStateResponse,
   SnapshotRequest,
   SnapshotResponse,
 } from "@unity-index/graph-core";
@@ -34,6 +38,13 @@ const SNAPSHOT_GRAPH_TYPE = "unity_graph_snapshot"; // mirror of graph/core SNAP
 const OPEN_FILE_TYPE = "unity_graph_open_file";
 const FIND_USAGES_TYPE = "unity_graph_find_usages";
 const REVEAL_IN_EXPLORER_TYPE = "unity_graph_reveal_in_explorer";
+// Day 5 filter persistence — mirrors of graph/core GET/SET_FILTER_STATE_TYPE.
+const GET_FILTER_STATE_TYPE = "unity_graph_get_filter_state";
+const SET_FILTER_STATE_TYPE = "unity_graph_set_filter_state";
+
+// workspaceState key. Scoped per-workspace so each Unity project keeps its
+// own filter view (matches the "persists per workspace" Day 5 requirement).
+const FILTER_STATE_STORAGE_KEY = "unityIndex.graph.filterState";
 
 export interface HostHandlerContext {
   /**
@@ -42,6 +53,11 @@ export interface HostHandlerContext {
    * a stop/start cycle.
    */
   getAssetIndex: () => UnityAssetIndexManager | undefined;
+  /**
+   * VS Code's per-workspace key/value store. Holds the Day 5 filter state.
+   * Passed in (not imported) so unit tests can stub it.
+   */
+  workspaceState: vscode.Memento;
 }
 
 export async function dispatchRequest(
@@ -71,9 +87,52 @@ export async function dispatchRequest(
     case REVEAL_IN_EXPLORER_TYPE: {
       return handleRevealInExplorer(payload);
     }
+    case GET_FILTER_STATE_TYPE: {
+      return handleGetFilterState(ctx);
+    }
+    case SET_FILTER_STATE_TYPE: {
+      return handleSetFilterState(payload, ctx);
+    }
     default:
       throw new Error(`unity_graph: unknown request type '${type}'`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Day 5 — filter state persistence
+// ---------------------------------------------------------------------------
+//
+// Storage shape mirrors `FilterState` from graph-core. We validate on both
+// read and write so a malformed value (corrupt globalState, hand-edited
+// settings.json, schema bump) defaults back to "nothing hidden, no search"
+// rather than crashing the panel.
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === "string");
+}
+
+function coerceFilterState(raw: unknown): FilterState {
+  if (raw && typeof raw === "object") {
+    const r = raw as Record<string, unknown>;
+    const hiddenKinds = isStringArray(r.hiddenKinds) ? r.hiddenKinds : [];
+    const search = typeof r.search === "string" ? r.search : "";
+    return { hiddenKinds, search };
+  }
+  return { hiddenKinds: [], search: "" };
+}
+
+function handleGetFilterState(ctx: HostHandlerContext): GetFilterStateResponse {
+  const raw = ctx.workspaceState.get<unknown>(FILTER_STATE_STORAGE_KEY);
+  return { state: coerceFilterState(raw) };
+}
+
+async function handleSetFilterState(
+  payload: unknown,
+  ctx: HostHandlerContext,
+): Promise<SetFilterStateResponse> {
+  const req = (payload ?? {}) as Partial<SetFilterStateRequest>;
+  const state = coerceFilterState(req.state);
+  await ctx.workspaceState.update(FILTER_STATE_STORAGE_KEY, state);
+  return { saved: true };
 }
 
 async function handleSnapshot(

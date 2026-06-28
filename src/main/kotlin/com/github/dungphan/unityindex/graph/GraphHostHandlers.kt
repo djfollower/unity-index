@@ -42,6 +42,8 @@ object GraphHostHandlers {
             GraphWireTypes.OPEN_FILE -> handleOpenFile(payload, project)
             GraphWireTypes.FIND_USAGES -> handleFindUsages(payload, project)
             GraphWireTypes.REVEAL_IN_EXPLORER -> handleRevealInExplorer(payload, project)
+            GraphWireTypes.GET_FILTER_STATE -> handleGetFilterState(project)
+            GraphWireTypes.SET_FILTER_STATE -> handleSetFilterState(payload, project)
             else -> throw IllegalArgumentException("unity_graph: unknown request type '$type'")
         }
     }
@@ -148,6 +150,51 @@ object GraphHostHandlers {
             RevealFileAction.openFile(File(file.path))
         }
         return buildJsonObject { put("revealed", JsonPrimitive(true)) }
+    }
+
+    // -----------------------------------------------------------------------
+    // Day 5 — filter state persistence
+    // -----------------------------------------------------------------------
+    //
+    // Project-scoped service holds the durable copy; the webview owns the live
+    // UI state. Get is sync (read from service), Set serialises into the
+    // service which IntelliJ will then persist at project close.
+
+    @Serializable
+    private data class FilterStateWire(
+        val hiddenKinds: List<String> = emptyList(),
+        val search: String = "",
+    )
+
+    @Serializable
+    private data class SetFilterStateWire(val state: FilterStateWire = FilterStateWire())
+
+    private fun handleGetFilterState(project: Project?): JsonElement {
+        project ?: throw IllegalStateException("no_project_open")
+        val current = GraphFilterStateService.get(project).read()
+        val state = buildJsonObject {
+            put(
+                "hiddenKinds",
+                kotlinx.serialization.json.JsonArray(current.hiddenKinds.map { JsonPrimitive(it) }),
+            )
+            put("search", JsonPrimitive(current.search))
+        }
+        return buildJsonObject { put("state", state) }
+    }
+
+    private fun handleSetFilterState(payload: JsonElement?, project: Project?): JsonElement {
+        project ?: throw IllegalStateException("no_project_open")
+        val req = try {
+            if (payload != null && payload is JsonObject) {
+                json.decodeFromJsonElement(SetFilterStateWire.serializer(), payload)
+            } else {
+                SetFilterStateWire()
+            }
+        } catch (e: Exception) {
+            throw IllegalArgumentException("invalid_filter_state: ${e.message}")
+        }
+        GraphFilterStateService.get(project).write(req.state.hiddenKinds, req.state.search)
+        return buildJsonObject { put("saved", JsonPrimitive(true)) }
     }
 
     private fun <T> decodeOrThrow(

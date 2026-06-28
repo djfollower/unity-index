@@ -95,3 +95,41 @@ export interface RevealInExplorerRequest {
 export interface RevealInExplorerResponse {
   revealed: true;
 }
+
+// ---------------------------------------------------------------------------
+// Day 5 filter state. The webview owns the canonical filter UI; the host is
+// just durable storage scoped to the active workspace / project. Round-trip:
+//   1. webview boots → calls `get_filter_state` once after snapshot is ready
+//   2. user toggles a kind / types in the search bar → store change
+//   3. store change → debounced `set_filter_state` (no response payload used)
+//
+// `hiddenKinds` carries NodeKind strings. We type it as `string[]` on the
+// wire so a future host version that knows about new kinds can persist them
+// without forcing a lockstep webview bump; the webview validates and drops
+// unknown entries on hydrate (see filterStore).
+//
+// `search` is a free-text fuzzy query. Persisted so reopening the panel
+// restores the last view. Empty string = no active search.
+// ---------------------------------------------------------------------------
+
+export const GET_FILTER_STATE_TYPE = 'unity_graph_get_filter_state' as const;
+export const SET_FILTER_STATE_TYPE = 'unity_graph_set_filter_state' as const;
+
+export interface FilterState {
+  hiddenKinds: string[];
+  search: string;
+}
+
+export interface GetFilterStateRequest {}
+
+export interface GetFilterStateResponse {
+  state: FilterState;
+}
+
+export interface SetFilterStateRequest {
+  state: FilterState;
+}
+
+export interface SetFilterStateResponse {
+  saved: true;
+}
