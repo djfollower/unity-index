@@ -74,6 +74,13 @@ export class SchemaBuilder {
     return this;
   }
 
+  /** Attach a hand-rolled JSON Schema fragment for richer types (array/object). */
+  property(name: string, schema: JsonSchema, required = false): this {
+    this.properties[name] = schema;
+    if (required) this.required.push(name);
+    return this;
+  }
+
   build(): JsonSchema {
     const schema: JsonSchema = {
       type: "object",

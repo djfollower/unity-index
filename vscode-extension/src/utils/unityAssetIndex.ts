@@ -171,6 +171,25 @@ export class UnityAssetIndex {
     return this.guidToPath.get(guid);
   }
 
+  /** Absolute paths of every indexed asset file, in walk order. */
+  get assetFilePaths(): readonly string[] {
+    return this.assetFiles;
+  }
+
+  /** (guid, absolutePath) for every script .meta indexed. */
+  scriptGuids(): IterableIterator<[string, string]> {
+    const scripts: Array<[string, string]> = [];
+    for (const [guid, p] of this.guidToPath) {
+      if (p.endsWith(".cs")) scripts.push([guid, p]);
+    }
+    return scripts.values();
+  }
+
+  /** Workspace context this index was built for. */
+  get projectContext(): ProjectContext {
+    return this.project;
+  }
+
   async findComponentUsages(
     typeName: string,
     signal?: AbortSignal,

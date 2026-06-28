@@ -51,6 +51,7 @@ export const TOOL_NAMES = {
   GET_PROJECT_CONTEXT: "unity_get_project_context",
   GET_API_USAGE: "unity_get_api_usage",
   FIND_ASSET_REFERENCES: "unity_find_asset_references",
+  UNITY_GRAPH_SNAPSHOT: "unity_graph_snapshot",
 } as const;
 
 export const PARAM_NAMES = {

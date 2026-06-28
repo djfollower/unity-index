@@ -2,7 +2,7 @@
   "name": "unity-index-vscode",
   "displayName": "Unity Index MCP",
   "description": "MCP server exposing C# Dev Kit / Roslyn code intelligence for Unity projects to AI agents.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "publisher": "dungphan",
   "license": "MIT",
   "repository": {
@@ -87,12 +87,14 @@
     "watch": "tsc -w -p .",
     "vscode:prepublish": "tsc -p .",
     "package": "node scripts/package.js",
-    "package:install": "node scripts/package.js --install"
+    "package:install": "node scripts/package.js --install",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.9.2",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vitest": "^3.2.4"
   }
 }

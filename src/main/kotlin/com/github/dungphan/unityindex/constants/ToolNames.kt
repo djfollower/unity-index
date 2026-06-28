@@ -31,6 +31,7 @@ object ToolNames {
     const val GET_PROJECT_CONTEXT = "unity_get_project_context"
     const val GET_API_USAGE = "unity_get_api_usage"
     const val FIND_ASSET_REFERENCES = "unity_find_asset_references"
+    const val UNITY_GRAPH_SNAPSHOT = "unity_graph_snapshot"
 
     const val GET_SYMBOL_BODY = "ide_get_symbol_body"
 }

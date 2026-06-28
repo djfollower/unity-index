@@ -24,6 +24,7 @@ import com.github.dungphan.unityindex.tools.unity.FindAssetReferencesTool
 import com.github.dungphan.unityindex.tools.unity.GetProjectContextTool
 import com.github.dungphan.unityindex.tools.unity.GetSerializedFieldValuesTool
 import com.github.dungphan.unityindex.tools.unity.GetUnityEventBindingsTool
+import com.github.dungphan.unityindex.tools.unity.UnityGraphSnapshotTool
 import com.intellij.openapi.diagnostic.logger
 import java.util.concurrent.ConcurrentHashMap
 
@@ -127,6 +128,7 @@ class ToolRegistry {
         register(GetProjectContextTool())
         register(GetApiUsageTool())
         register(FindAssetReferencesTool())
+        register(UnityGraphSnapshotTool())
 
         LOG.info("Registered Unity-specific tools")
     }

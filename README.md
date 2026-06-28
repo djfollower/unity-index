@@ -64,6 +64,8 @@ once for the whole batch, and entries execute concurrently (default 8, max 16). 
 | `unity_get_serialized_field_values` | Read serialized field values across prefabs and scenes |
 | `unity_get_unity_event_bindings` | Find UnityEvent bindings (Button.onClick, etc.) that call a method |
 | `unity_get_api_usage` | Find all uses of a specific Unity API (e.g., Physics.Raycast) |
+| `unity_find_asset_references` | Find every prefab/scene/SO that references an asset by GUID |
+| `unity_graph_snapshot` | Full asset-domain graph (scripts/prefabs/scenes/SOs + edges) for the graph webview and agents |
 
 ## Requirements
 

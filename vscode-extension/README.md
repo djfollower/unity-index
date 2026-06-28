@@ -40,7 +40,9 @@ The extension provides full parity with the Rider plugin (24 tools):
 `unity_get_project_context`, `unity_get_assembly_map`,
 `unity_get_component_usage`, `unity_get_unity_event_bindings`,
 `unity_get_serialized_field_values`, `unity_find_getcomponent_patterns`,
-`unity_get_api_usage`.
+`unity_get_api_usage`, `unity_find_asset_references`,
+`unity_graph_snapshot` (full asset-domain graph — see
+[`docs/graph-mcp-tools.md`](../docs/graph-mcp-tools.md) §3.1).
 
 **Batch dispatcher**: `ide_batch` runs up to 256 tool calls in a single MCP
 request, with one shared LSP readiness probe and bounded concurrency

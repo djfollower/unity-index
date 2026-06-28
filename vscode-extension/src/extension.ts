@@ -42,6 +42,7 @@ import { GetSerializedFieldValuesTool } from "./tools/unity/getSerializedFieldVa
 import { FindGetComponentPatternsTool } from "./tools/unity/findGetComponentPatternsTool";
 import { GetApiUsageTool } from "./tools/unity/getApiUsageTool";
 import { FindAssetReferencesTool } from "./tools/unity/findAssetReferencesTool";
+import { UnityGraphSnapshotTool } from "./tools/unity/unityGraphSnapshotTool";
 
 // Batch dispatcher
 import { BatchTool } from "./tools/batchTool";
@@ -95,6 +96,7 @@ function buildRegistry(): ToolRegistry {
   registry.register(new FindGetComponentPatternsTool());
   registry.register(new GetApiUsageTool());
   registry.register(new FindAssetReferencesTool());
+  registry.register(new UnityGraphSnapshotTool());
   // Batch dispatcher must be registered last — it holds a reference to the
   // registry so it can dispatch entries to any other registered tool.
   registry.register(new BatchTool(registry));
