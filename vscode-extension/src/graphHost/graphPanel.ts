@@ -8,7 +8,7 @@ import type {
 } from "@unity-index/graph-core";
 
 import { transformHtml } from "./htmlTransformer";
-import { dispatchRequest } from "./hostHandlers";
+import { dispatchRequest, HostHandlerContext } from "./hostHandlers";
 
 // Editor-area webview panel hosting the unity-index-graph Vite bundle. We use
 // a panel (not a sidebar WebviewView) because a node graph wants the editor
@@ -22,6 +22,7 @@ export class GraphPanel {
     private readonly panel: vscode.WebviewPanel,
     private readonly extensionUri: vscode.Uri,
     private readonly log: (msg: string) => void,
+    private readonly hostCtx: HostHandlerContext,
   ) {
     this.setHtml();
     this.panel.webview.onDidReceiveMessage((env: BridgeEnvelope) =>
@@ -34,7 +35,11 @@ export class GraphPanel {
     });
   }
 
-  static reveal(extensionUri: vscode.Uri, log: (msg: string) => void): void {
+  static reveal(
+    extensionUri: vscode.Uri,
+    log: (msg: string) => void,
+    hostCtx: HostHandlerContext,
+  ): void {
     if (GraphPanel.current) {
       GraphPanel.current.panel.reveal();
       return;
@@ -51,7 +56,7 @@ export class GraphPanel {
         retainContextWhenHidden: true,
       },
     );
-    GraphPanel.current = new GraphPanel(panel, extensionUri, log);
+    GraphPanel.current = new GraphPanel(panel, extensionUri, log, hostCtx);
   }
 
   private setHtml(): void {
@@ -87,7 +92,7 @@ export class GraphPanel {
     const req = env as RequestEnvelope;
     let response: ResponseEnvelope;
     try {
-      const payload = await dispatchRequest(req.type, req.payload);
+      const payload = await dispatchRequest(req.type, req.payload, this.hostCtx);
       response = {
         kind: "response",
         id: req.id,

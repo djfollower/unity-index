@@ -2,7 +2,7 @@
   "name": "unity-index-vscode",
   "displayName": "Unity Index MCP",
   "description": "MCP server exposing C# Dev Kit / Roslyn code intelligence for Unity projects to AI agents.",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "dungphan",
   "license": "MIT",
   "repository": {

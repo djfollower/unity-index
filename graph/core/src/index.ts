@@ -13,7 +13,7 @@ export type {
   HelloGraphRequest,
   HelloGraphResponse,
 } from './messages.js';
-export { HELLO_GRAPH_TYPE } from './messages.js';
+export { HELLO_GRAPH_TYPE, SNAPSHOT_GRAPH_TYPE } from './messages.js';
 
 export type {
   EdgeKind,

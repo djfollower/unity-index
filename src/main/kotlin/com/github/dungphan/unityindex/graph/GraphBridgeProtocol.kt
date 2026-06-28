@@ -23,4 +23,9 @@ object GraphWireTypes {
     // Mirror of graph/core/src/messages.ts HELLO_GRAPH_TYPE. Drift surfaces
     // at runtime as a webview timeout.
     const val HELLO = "unity_graph_hello"
+
+    // Mirror of graph/core/src/messages.ts SNAPSHOT_GRAPH_TYPE. Also matches
+    // ToolNames.UNITY_GRAPH_SNAPSHOT so the same identifier flows through
+    // both the bridge and HTTP paths.
+    const val SNAPSHOT = "unity_graph_snapshot"
 }

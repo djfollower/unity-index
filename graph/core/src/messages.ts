@@ -21,3 +21,14 @@ export interface HelloGraphResponse {
   greeting: string;
   host: 'vscode' | 'rider';
 }
+
+// ---------------------------------------------------------------------------
+// snapshot — Day 3 wires the webview to the existing `unity_graph_snapshot`
+// MCP tool through the in-process host bridge. The wire string MUST match
+// ToolNames.UNITY_GRAPH_SNAPSHOT (Kotlin) and TOOL_NAMES.UNITY_GRAPH_SNAPSHOT
+// (TS) so the same identifier flows through the bridge and HTTP paths.
+// Request/response payload types live in ./snapshot-wire.ts and are
+// re-exported from ./index.ts for webview ergonomics.
+// ---------------------------------------------------------------------------
+
+export const SNAPSHOT_GRAPH_TYPE = 'unity_graph_snapshot' as const;
