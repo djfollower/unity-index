@@ -32,3 +32,66 @@ export interface HelloGraphResponse {
 // ---------------------------------------------------------------------------
 
 export const SNAPSHOT_GRAPH_TYPE = 'unity_graph_snapshot' as const;
+
+// ---------------------------------------------------------------------------
+// Day 4 click-through actions. Each one is fired by the webview in response
+// to a user gesture (double-click, right-click → menu item) and routed to the
+// host through the same bridge envelope as `hello` / `snapshot`. Responses
+// carry no useful payload — success is the IDE doing something visible to the
+// user; failures throw `Error(message)` which the bridge turns into an
+// `error: { message }` envelope the webview surfaces in its status bar.
+//
+// Stable error strings (so the webview can decide on copy/CTA):
+//   - 'file_not_found'        — the path didn't resolve under the project
+//   - 'path_outside_project'  — path resolved but is outside the workspace
+//   - 'no_project_open'       — bridge invoked before a project is bound
+//   - 'unsupported_kind'      — node kind has no useful action here
+// ---------------------------------------------------------------------------
+
+export const OPEN_FILE_TYPE = 'unity_graph_open_file' as const;
+
+export interface OpenFileRequest {
+  /** Project-relative or absolute path. Resolution mirrors `project_path`
+   *  handling in ProjectResolver — absolute paths are taken as-is, relative
+   *  paths are joined to the resolved project root. */
+  path: string;
+  /** 1-based line number. Omit to open at the top of the file. */
+  line?: number;
+  /** 1-based column. Ignored when `line` is omitted. */
+  column?: number;
+}
+
+export interface OpenFileResponse {
+  opened: true;
+}
+
+export const FIND_USAGES_TYPE = 'unity_graph_find_usages' as const;
+
+export interface FindUsagesRequest {
+  /** Graph node ID (so the host can log which node triggered the call). */
+  node_id: string;
+  /** Path of the declaring file — required so we can navigate before invoking
+   *  the IDE's native Find Usages action against the symbol at the caret. */
+  path: string;
+  /** 1-based caret position. The host opens the file at this position then
+   *  triggers the native references panel. When omitted, the host opens at
+   *  the top of the file (Find Usages will still work for the first symbol
+   *  found there — useful for single-class scripts). */
+  line?: number;
+  column?: number;
+}
+
+export interface FindUsagesResponse {
+  invoked: true;
+}
+
+export const REVEAL_IN_EXPLORER_TYPE = 'unity_graph_reveal_in_explorer' as const;
+
+export interface RevealInExplorerRequest {
+  /** Path to reveal in the OS file manager (Finder / Explorer / Files). */
+  path: string;
+}
+
+export interface RevealInExplorerResponse {
+  revealed: true;
+}

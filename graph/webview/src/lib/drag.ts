@@ -8,14 +8,20 @@
 
 import type Graph from 'graphology';
 import type Sigma from 'sigma';
-import type { MouseCoords } from 'sigma/types';
+import type { MouseCoords, SigmaNodeEventPayload } from 'sigma/types';
 
 export function attachDragBehavior(sigma: Sigma, graph: Graph): () => void {
   let draggedNode: string | null = null;
   const mouse = sigma.getMouseCaptor();
   const camera = sigma.getCamera();
 
-  const onDownNode = ({ node }: { node: string }) => {
+  const onDownNode = ({ node, event }: SigmaNodeEventPayload) => {
+    // Only left-click starts a drag. Right-click `down` also fires this event,
+    // and without this guard the node would follow the cursor after the user
+    // dismissed the context menu — until they happened to click somewhere
+    // (which sigma reads as `up`). MouseEvent.button: 0=left, 1=middle, 2=right.
+    const orig = event.original as MouseEvent | TouchEvent;
+    if ('button' in orig && orig.button !== 0) return;
     draggedNode = node;
     graph.setNodeAttribute(node, 'highlighted', true);
     // Pin the camera while we drag a node so the drag doesn't double as a pan.

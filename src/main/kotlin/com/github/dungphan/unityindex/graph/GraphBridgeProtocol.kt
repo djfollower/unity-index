@@ -28,4 +28,10 @@ object GraphWireTypes {
     // ToolNames.UNITY_GRAPH_SNAPSHOT so the same identifier flows through
     // both the bridge and HTTP paths.
     const val SNAPSHOT = "unity_graph_snapshot"
+
+    // Day 4 click-through actions — mirrors of graph/core/src/messages.ts
+    // OPEN_FILE_TYPE / FIND_USAGES_TYPE / REVEAL_IN_EXPLORER_TYPE.
+    const val OPEN_FILE = "unity_graph_open_file"
+    const val FIND_USAGES = "unity_graph_find_usages"
+    const val REVEAL_IN_EXPLORER = "unity_graph_reveal_in_explorer"
 }

@@ -12,8 +12,20 @@ export { request } from './host-bridge.js';
 export type {
   HelloGraphRequest,
   HelloGraphResponse,
+  OpenFileRequest,
+  OpenFileResponse,
+  FindUsagesRequest,
+  FindUsagesResponse,
+  RevealInExplorerRequest,
+  RevealInExplorerResponse,
 } from './messages.js';
-export { HELLO_GRAPH_TYPE, SNAPSHOT_GRAPH_TYPE } from './messages.js';
+export {
+  HELLO_GRAPH_TYPE,
+  SNAPSHOT_GRAPH_TYPE,
+  OPEN_FILE_TYPE,
+  FIND_USAGES_TYPE,
+  REVEAL_IN_EXPLORER_TYPE,
+} from './messages.js';
 
 export type {
   EdgeKind,
