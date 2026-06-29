@@ -25,7 +25,11 @@ const KEY_VALUE = /^(\s*)(\S+?):\s*(.*)$/;
 export class UnityYamlDocument {
   constructor(
     readonly classId: number,
-    readonly fileId: number,
+    // Kept as a string because Unity fileIDs are 64-bit and routinely exceed
+    // JS Number's 2^53 safe-integer range — parseInt would silently round and
+    // make these IDs diverge from the Kotlin builder's Long-backed values,
+    // breaking the wire-equivalence guarantee for `unity://component/...` IDs.
+    readonly fileId: string,
     readonly typeName: string,
     readonly properties: Map<string, string>,
     readonly sourceFile: string,
@@ -39,11 +43,11 @@ export class UnityYamlDocument {
     return this.properties.get("m_Script.guid");
   }
 
-  getGameObjectFileId(): number | null {
+  getGameObjectFileId(): string | null {
     const v = this.properties.get("m_GameObject.fileID");
     if (!v) return null;
-    const n = parseInt(v, 10);
-    return Number.isFinite(n) ? n : null;
+    const trimmed = v.trim();
+    return /^-?\d+$/.test(trimmed) ? trimmed : null;
   }
 
   getSerializedFieldValue(fieldName: string): string | undefined {
@@ -98,7 +102,7 @@ export function parseUnityYaml(
   const lines = content.split(/\r?\n/);
 
   let classId = -1;
-  let fileId = -1;
+  let fileId = "";
   let currentLines: string[] = [];
   let inDocument = false;
 
@@ -110,7 +114,7 @@ export function parseUnityYaml(
         if (doc) documents.push(doc);
       }
       classId = parseInt(hm[1], 10);
-      fileId = parseInt(hm[2], 10);
+      fileId = hm[2];
       currentLines = [];
       inDocument = true;
       continue;
@@ -128,7 +132,7 @@ export function parseUnityYaml(
 
 function parseDocument(
   classId: number,
-  fileId: number,
+  fileId: string,
   lines: string[],
   sourcePath: string,
 ): UnityYamlDocument | null {

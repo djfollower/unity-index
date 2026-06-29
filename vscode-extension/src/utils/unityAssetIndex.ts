@@ -36,8 +36,10 @@ const yieldEventLoop = () => new Promise<void>((r) => setImmediate(r));
 export interface ComponentUsage {
   assetFile: string;
   gameObjectName: string | null;
-  gameObjectFileId: number | null;
-  fileId: number;
+  // Unity fileIDs are 64-bit and routinely exceed JS Number precision; keep
+  // them as strings so MCP clients get the same digits Unity wrote.
+  gameObjectFileId: string | null;
+  fileId: string;
 }
 
 export interface ComponentUsageResult {
@@ -66,7 +68,7 @@ export interface SerializedFieldValue {
   assetFile: string;
   gameObjectName: string | null;
   value: string;
-  fileId: number;
+  fileId: string;
 }
 
 export interface SerializedFieldResult {
@@ -490,8 +492,8 @@ async function walkAsync(
 
 function collectGameObjects(
   docs: UnityYamlDocument[],
-): Map<number, UnityYamlDocument> {
-  const out = new Map<number, UnityYamlDocument>();
+): Map<string, UnityYamlDocument> {
+  const out = new Map<string, UnityYamlDocument>();
   for (const d of docs) if (d.classId === 1) out.set(d.fileId, d);
   return out;
 }

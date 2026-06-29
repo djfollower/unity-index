@@ -23,7 +23,11 @@ export function assetId(guid: string): string {
   return `unity://asset/${guid}`;
 }
 
-export function componentInstanceId(ownerGuid: string, fileId: number): string {
+// fileId is a string (not a number) because Unity fileIDs are 64-bit and
+// commonly exceed JS's 2^53 safe-integer range — see UnityYamlDocument.fileId.
+// Mirrors the Kotlin `componentInstanceId(ownerGuid, fileId: Long)` whose Long
+// formats identically to the verbatim YAML digits.
+export function componentInstanceId(ownerGuid: string, fileId: string): string {
   return `unity://component/${ownerGuid}/${fileId}`;
 }
 

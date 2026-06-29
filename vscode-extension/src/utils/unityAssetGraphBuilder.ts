@@ -191,9 +191,7 @@ export async function buildAssetGraph(
           });
         }
       } else if (doc.classId === CLASS_ID_PREFAB_INSTANCE) {
-        const sourceGuidRaw =
-          doc.properties.get("m_SourcePrefab.guid") ??
-          doc.properties.get("m_SourcePrefab.guid");
+        const sourceGuidRaw = doc.properties.get("m_SourcePrefab.guid");
         const sourceGuid = sourceGuidRaw ? normalizeGuid(sourceGuidRaw) : undefined;
         if (!sourceGuid) continue;
         if (nodeKind === "scene") {
