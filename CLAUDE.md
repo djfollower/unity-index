@@ -24,6 +24,7 @@ Based on [jetbrains-index-mcp-plugin](https://github.com/hechtcarmel/jetbrains-i
    - Shared assets (bridge scripts under `tools/`, README, MCP wire docs) → update once, ensure they cover both variants.
    - If a feature genuinely cannot be ported (e.g. a Rider-only API), document the gap in `vscode-extension/README.md` instead of silently diverging.
    - When in doubt, port the Kotlin behavior literally to TypeScript (or vice versa). Same tool names, same parameter names, same JSON field names.
+   - Shared traversal fixture (Day 6): if you change `graph/core/src/__tests__/traversal.fixtures.ts` or `graph/core/src/traversal.ts`, re-run `npx tsx graph/core/scripts/dump-fixture.ts --write` in the same commit so `src/test/resources/graph/traversal-fixture.json` stays in sync. `GraphTraversalTest.kt` reads the JSON and will fail loudly if the two diverge.
 
 4. **Rider RD-backed PSI proxies need defensive resolution — share the helpers, don't reinvent them.** In Rider, C# items often arrive as `ProtocolNavigationItem` / RD-backed PSI proxies. These reliably misbehave in three specific ways that have burned us before:
    - `PsiNamedElement.name` and reflective `getName()` return `null` or blank; the only carrier of the identifier is the popup `NavigationItem.name` (e.g. `"UniqueID : string"`, with a ` : <type>` suffix that must be stripped).

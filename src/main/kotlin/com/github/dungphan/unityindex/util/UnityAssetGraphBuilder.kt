@@ -343,7 +343,7 @@ object UnityAssetGraphBuilder {
         ) {
             warnings.add(
                 GraphWarning(
-                    code = "subfile_kind_ignored",
+                    code = GraphWarningCodes.SUBFILE_KIND_IGNORED,
                     message = "component_instance and component_field are never emitted as top-level nodes; see graph-schema.md §2.3.",
                     context = null
                 )
@@ -389,7 +389,7 @@ object UnityAssetGraphBuilder {
         if (filteredEdges.any { it.kind == EdgeKind.SCRIPT_DECLARES_CLASS }) {
             warnings.add(
                 GraphWarning(
-                    code = "dangling_csharp_targets",
+                    code = GraphWarningCodes.DANGLING_CSHARP_TARGETS,
                     message = "script_declares_class edges point to csharp nodes that Day 2 does not emit; Day 8's code-edges harvest will materialize them.",
                     context = null
                 )
@@ -402,7 +402,7 @@ object UnityAssetGraphBuilder {
         ) {
             warnings.add(
                 GraphWarning(
-                    code = "unresolved_targets",
+                    code = GraphWarningCodes.UNRESOLVED_TARGETS,
                     message = "Some edges referenced GUIDs not present in the project's .meta map (likely Unity built-ins or missing assets).",
                     context = buildJsonObject {
                         put("serialized_binding", JsonPrimitive(unresolvedSerializedBindingTargets))
@@ -514,6 +514,30 @@ object UnityAssetGraphBuilder {
             }
         }
         return Regex("^${sb}$")
+    }
+
+    /**
+     * Shape a Day-6 subgraph (from neighbors/impact/context traversal) into a
+     * fresh `GraphSnapshot`. Re-emits `generated_at` and recomputes `stats`
+     * for the subset; `source_phase` carries over from the source.
+     */
+    fun subgraphResponse(
+        nodes: List<GraphNode>,
+        edges: List<GraphEdge>,
+        sourcePhase: GraphSourcePhase,
+    ): GraphSnapshot {
+        return GraphSnapshot(
+            nodes = nodes,
+            edges = edges,
+            generated_at = Instant.now().toString(),
+            source_phase = sourcePhase,
+            stats = GraphStats(
+                node_count = nodes.size,
+                edge_count = edges.size,
+                skipped_component_instances = 0,
+                skipped_component_fields = 0,
+            ),
+        )
     }
 
     private data class CursorState(val offset: Int)

@@ -12,7 +12,9 @@ export type ActionId =
   | 'open_file'
   | 'find_usages'
   | 'reveal_in_explorer'
-  | 'copy_guid';
+  | 'copy_guid'
+  | 'focus_neighborhood'
+  | 'show_impact';
 
 export interface ActionDescriptor {
   id: ActionId;
@@ -26,6 +28,8 @@ export interface ActionDescriptor {
 
 // One source-of-truth list so tests + UI iterate the same set.
 export const ALL_ACTIONS: ActionDescriptor[] = [
+  { id: 'focus_neighborhood', label: 'Focus on this node', isSync: true },
+  { id: 'show_impact', label: 'Show impact', isSync: true },
   { id: 'open_file', label: 'Open file', isSync: false },
   { id: 'find_usages', label: 'Find usages', isSync: false },
   { id: 'reveal_in_explorer', label: 'Reveal in OS file manager', isSync: false },
@@ -52,6 +56,9 @@ export interface NodeFacts {
   kind: NodeKind | string;
   hasPath: boolean;
   hasGuid: boolean;
+  /** Day 6 Task 10: 'show_impact' would be a no-op for orphan leaves where
+   *  nothing depends on the node, so the menu hides the action in that case. */
+  hasIncomingEdges?: boolean;
 }
 
 /** Decide which actions apply to a node. Order matches ALL_ACTIONS so the
@@ -70,5 +77,9 @@ export function isEligible(action: ActionId, facts: NodeFacts): boolean {
       return facts.hasPath && CODE_BEARING_KINDS.has(facts.kind as NodeKind);
     case 'copy_guid':
       return facts.hasGuid;
+    case 'focus_neighborhood':
+      return true;
+    case 'show_impact':
+      return facts.hasIncomingEdges === true;
   }
 }

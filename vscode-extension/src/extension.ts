@@ -43,6 +43,9 @@ import { FindGetComponentPatternsTool } from "./tools/unity/findGetComponentPatt
 import { GetApiUsageTool } from "./tools/unity/getApiUsageTool";
 import { FindAssetReferencesTool } from "./tools/unity/findAssetReferencesTool";
 import { UnityGraphSnapshotTool } from "./tools/unity/unityGraphSnapshotTool";
+import { UnityGraphNeighborsTool } from "./tools/unity/unityGraphNeighborsTool";
+import { UnityGraphImpactTool } from "./tools/unity/unityGraphImpactTool";
+import { UnityGraphContextTool } from "./tools/unity/unityGraphContextTool";
 
 // Batch dispatcher
 import { BatchTool } from "./tools/batchTool";
@@ -97,6 +100,9 @@ function buildRegistry(): ToolRegistry {
   registry.register(new GetApiUsageTool());
   registry.register(new FindAssetReferencesTool());
   registry.register(new UnityGraphSnapshotTool());
+  registry.register(new UnityGraphNeighborsTool());
+  registry.register(new UnityGraphImpactTool());
+  registry.register(new UnityGraphContextTool());
   // Batch dispatcher must be registered last — it holds a reference to the
   // registry so it can dispatch entries to any other registered tool.
   registry.register(new BatchTool(registry));

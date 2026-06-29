@@ -63,3 +63,6 @@ export const SNAPSHOT_MAX_PAGE_SIZE = 20000;
 
 export const WARNING_SUBFILE_KIND_IGNORED = 'subfile_kind_ignored';
 export const WARNING_DANGLING_CSHARP_TARGETS = 'dangling_csharp_targets';
+export const WARNING_UNRESOLVED_TARGETS = 'unresolved_targets';
+export const WARNING_ID_UNRESOLVED = 'id_unresolved';
+export const WARNING_NEIGHBORS_TRUNCATED = 'neighbors_truncated';

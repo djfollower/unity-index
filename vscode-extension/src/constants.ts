@@ -52,6 +52,9 @@ export const TOOL_NAMES = {
   GET_API_USAGE: "unity_get_api_usage",
   FIND_ASSET_REFERENCES: "unity_find_asset_references",
   UNITY_GRAPH_SNAPSHOT: "unity_graph_snapshot",
+  UNITY_GRAPH_NEIGHBORS: "unity_graph_neighbors",
+  UNITY_GRAPH_IMPACT: "unity_graph_impact",
+  UNITY_GRAPH_CONTEXT: "unity_graph_context",
 } as const;
 
 export const PARAM_NAMES = {

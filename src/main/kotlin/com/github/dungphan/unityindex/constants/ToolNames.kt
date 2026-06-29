@@ -32,6 +32,9 @@ object ToolNames {
     const val GET_API_USAGE = "unity_get_api_usage"
     const val FIND_ASSET_REFERENCES = "unity_find_asset_references"
     const val UNITY_GRAPH_SNAPSHOT = "unity_graph_snapshot"
+    const val UNITY_GRAPH_NEIGHBORS = "unity_graph_neighbors"
+    const val UNITY_GRAPH_IMPACT = "unity_graph_impact"
+    const val UNITY_GRAPH_CONTEXT = "unity_graph_context"
 
     const val GET_SYMBOL_BODY = "ide_get_symbol_body"
 }

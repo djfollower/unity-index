@@ -28,6 +28,13 @@
   import { filterStore } from './lib/filterStore.svelte';
   import { collectPresentKinds, computeMatches, reconcileHiddenKinds } from './lib/filter';
   import { getFilterState, setFilterState } from './lib/filterSync';
+  import Breadcrumb from './lib/Breadcrumb.svelte';
+  import type { ImpactClassification } from '@unity-index/graph-core';
+  import {
+    computeVisibility,
+    resetFocusCache,
+    type FocusFrame,
+  } from './lib/focus';
 
   type ViewState = 'loading' | 'empty' | 'ready' | 'error';
 
@@ -38,7 +45,11 @@
   let viewState: ViewState = $state('loading');
   let status = $state('initialising…');
   let errorCopy = $state('');
-  let lastSnapshot: SnapshotResponse | null = null;
+  // Reactive — the Day 6 focus effect depends on this. Plain `let` here used
+  // to silently break focus: the effect's first run with lastSnapshot=null
+  // took the early-return path before touching focusStack, so focusStack
+  // never became a tracked dep and later mutations didn't re-run the effect.
+  let lastSnapshot: SnapshotResponse | null = $state(null);
   let bridgeRef: ReturnType<typeof pickBridge> | null = null;
   // Mirror of the active Graphology graph, exposed reactively so the
   // SelectionPanel can read node attrs + neighbor degrees without reaching
@@ -74,6 +85,16 @@
   // set; the union itself is what we draw. Recomputed alongside matches.
   let relatedRef: Set<string> = new Set();
   let searchActiveRef = false;
+
+  // Day 6 Task 7: focus subgraph stack. Last frame is the active focus; earlier
+  // frames are breadcrumb history. Empty stack = unfocused (show everything).
+  let focusStack: FocusFrame[] = $state([]);
+  // Reducer-side mirrors. visibleNodesRef/visibleEdgesRef are the AND mask we
+  // intersect with kind filters + search; impactClassRef colours rings on
+  // impact frames (Task 10).
+  let visibleNodesRef: Set<string> = new Set();
+  let visibleEdgesRef: Set<string> = new Set();
+  let impactClassRef: Map<string, ImpactClassification | undefined> = new Map();
 
   function renderPlaceholderGraph(label: string): void {
     // Day-1 hardcoded 3-node graph. Used in standalone (no host) mode as a
@@ -145,6 +166,11 @@
       nodeReducer: (node, attrs) => {
         const kind = attrs.kind as string;
         const style = nodeStyleFor(kind);
+        // Day 6 Task 8 — focus × filter composition (AND):
+        //   visible iff focus(if active) AND kind filter AND search(if active).
+        if (focusStack.length > 0 && !visibleNodesRef.has(node)) {
+          return { ...attrs, hidden: true };
+        }
         // Kind filter: hidden nodes drop out of layout interactions entirely.
         // Sigma's `hidden: true` skips drawing the node AND its labels.
         if (hiddenKindsRef.has(kind)) {
@@ -162,7 +188,17 @@
         const selectionMiss = selectedRef !== null && selectedRef !== node;
         const dimmed = neighborOfMatch || selectionMiss;
         const dimAlpha = neighborOfMatch ? 0.45 : 0.4;
-        return {
+        // Day 6 Task 10 — impact classification rings via Sigma's borderColor
+        // settings (no custom node program needed).
+        const classification = impactClassRef.get(node);
+        const ringColor = classification === 'direct'
+          ? '#ff6b6b'
+          : classification === 'transitive'
+            ? '#ffaa33'
+            : classification === 'weak'
+              ? 'rgba(180,180,180,0.7)'
+              : undefined;
+        const next: Record<string, unknown> = {
           ...attrs,
           color: dimmed ? fade(style.color, dimAlpha) : style.color,
           size: style.size,
@@ -170,12 +206,21 @@
           highlighted: selectedRef === node || isMatch,
           zIndex: selectedRef === node ? 2 : (isMatch ? 1 : 0),
         };
+        if (ringColor) {
+          next.borderColor = ringColor;
+          next.borderSize = 2;
+        }
+        return next;
       },
       edgeReducer: (edge, attrs) => {
         const style = edgeStyleFor(attrs.kind as string);
         const g = sigma?.getGraph();
         const source = g?.source(edge);
         const target = g?.target(edge);
+        // Day 6 Task 8 — edge visibility under focus.
+        if (focusStack.length > 0 && !visibleEdgesRef.has(edge)) {
+          return { ...attrs, hidden: true };
+        }
         // Edge hidden iff either endpoint is kind-filtered. Reading the
         // endpoints' kinds back off the graph is O(1) and avoids stashing
         // them on the edge attrs.
@@ -296,8 +341,28 @@
     const layoutTail = overSoftCap
       ? ` · graph too large for default layout (${graph.order.toLocaleString()} nodes) — Day 7 will fix`
       : '';
-    status = `${snapshotSummary(res)}${droppedTail}${layoutTail}`;
+    baseStatus = `${snapshotSummary(res)}${droppedTail}${layoutTail}`;
+    status = baseStatus;
   }
+  // Day 6 Task 8: the active focus appends to the snapshot/filter status copy.
+  // Keep the snapshot-derived prefix here so the focus-effect can re-render it
+  // each time the user steps hops up/down without re-running renderSnapshot.
+  let baseStatus = $state('');
+
+  $effect(() => {
+    const active = focusStack[focusStack.length - 1];
+    if (!active || !currentGraph) {
+      status = baseStatus || status;
+      return;
+    }
+    const label = currentGraph.hasNode(active.nodeId)
+      ? (currentGraph.getNodeAttribute(active.nodeId, 'label') as string) ?? active.nodeId
+      : active.nodeId;
+    const total = currentGraph.order;
+    const visible = visibleNodesRef.size;
+    const kindTail = active.kind === 'impact' ? ', impact' : `${active.hops} hop${active.hops === 1 ? '' : 's'}, ${active.direction}`;
+    status = `${baseStatus} · focused on ${label} (${kindTail}) — ${visible}/${total} nodes visible`;
+  });
 
   // Apply an alpha to a #RRGGBB string. Used to fade non-selected items;
   // Sigma's render path accepts rgba so a stringified rgba works without
@@ -319,6 +384,13 @@
     return `${s.node_count.toLocaleString()} nodes · ${s.edge_count.toLocaleString()} edges${skipTail}${wTail}`;
   }
 
+  // Day 6: reset focus when a new snapshot loads (IDs may not be in the new
+  // graph). The breadcrumb chips become meaningless across snapshots.
+  function resetFocus(): void {
+    focusStack = [];
+    resetFocusCache();
+  }
+
   async function loadSnapshot(): Promise<void> {
     if (!bridgeRef || bridgeRef.host === 'standalone') return;
     viewState = 'loading';
@@ -327,6 +399,7 @@
     try {
       const res = await fetchSnapshot(bridgeRef.bridge);
       lastSnapshot = res;
+      resetFocus();
       if (res.snapshot.nodes.length === 0) {
         viewState = 'empty';
         status = 'no Unity assets found';
@@ -365,6 +438,43 @@
     }
     await loadSnapshot();
   });
+
+  // Day 6 Task 7/8: recompute focus visibility whenever the stack or snapshot
+  // changes. Pure local traversal — no bridge round-trip. We DO NOT re-run
+  // ForceAtlas2 on focus (positions stay; visibility flips). See focus.ts for
+  // the rationale and Day-7 caveats.
+  $effect(() => {
+    // Touch BOTH reactive deps before any early-return so they're tracked on
+    // the first run, even when the snapshot hasn't arrived yet. Svelte 5
+    // does per-run dependency tracking — without this, a first run with
+    // lastSnapshot=null silently skips registering focusStack and later
+    // focus mutations don't re-fire the effect.
+    const stack = focusStack;
+    const snap = lastSnapshot;
+    if (!snap || stack.length === 0) {
+      visibleNodesRef = new Set();
+      visibleEdgesRef = new Set();
+      impactClassRef = new Map();
+      sigma?.refresh();
+      return;
+    }
+    const v = computeVisibility(snap.snapshot, stack);
+    visibleNodesRef = v.nodes;
+    visibleEdgesRef = v.edges;
+    impactClassRef = v.impactClass;
+    sigma?.refresh();
+  });
+
+  // Day 6 Task 9: Esc clears the top focus frame — but only when no input is
+  // focused, so typing Esc in the search bar still clears the search rather
+  // than collapsing focus.
+  function handleKeyDown(e: KeyboardEvent): void {
+    if (e.key !== 'Escape') return;
+    if (focusStack.length === 0) return;
+    const active = document.activeElement;
+    if (active && active.tagName === 'INPUT') return;
+    focusStack = focusStack.slice(0, -1);
+  }
 
   // Day 5 Task 2: keep the reducer refs in lockstep with the reactive store
   // and re-render on any change. Sigma can no-op a refresh that doesn't need
@@ -414,6 +524,7 @@
     sigma?.kill();
     sigma = null;
     currentGraph = null;
+    resetFocusCache();
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;
@@ -500,6 +611,18 @@
         }
         return;
       }
+      case 'focus_neighborhood': {
+        // Day 6 Task 10 — local mutation, no bridge round-trip.
+        focusStack = [...focusStack, { nodeId, hops: 1, direction: 'both', kind: 'neighbors' }];
+        return;
+      }
+      case 'show_impact': {
+        // Day 6 Task 10 — impact view = direction:'in' with deep hops so the
+        // user sees the full reverse-reachable set. The traversal classifies
+        // each impacted node and the reducer paints colored rings.
+        focusStack = [...focusStack, { nodeId, hops: 4, direction: 'in', kind: 'impact' }];
+        return;
+      }
       case 'find_usages': {
         if (!bridgeRef || bridgeRef.host === 'standalone' || !filePath) return;
         try {
@@ -550,6 +673,8 @@
   }
 </script>
 
+<svelte:window onkeydown={handleKeyDown} />
+
 <div class="root">
   <div class="status" class:status-error={viewState === 'error'}>{status}</div>
   <!-- Suppress the browser's native context menu over the graph area so it
@@ -567,6 +692,22 @@
     {#if viewState === 'ready'}
       <FilterSidebar {presentKinds} />
       <SearchBar totalNodes={currentGraph?.order ?? 0} />
+      <Breadcrumb
+        stack={focusStack}
+        graph={currentGraph}
+        onPop={(index) => { focusStack = focusStack.slice(0, index); }}
+        onReset={() => { focusStack = []; }}
+        onUpdateHops={(hops) => {
+          const last = focusStack[focusStack.length - 1];
+          if (!last) return;
+          focusStack = [...focusStack.slice(0, -1), { ...last, hops }];
+        }}
+        onUpdateDirection={(direction) => {
+          const last = focusStack[focusStack.length - 1];
+          if (!last) return;
+          focusStack = [...focusStack.slice(0, -1), { ...last, direction }];
+        }}
+      />
       <SelectionPanel nodeId={selectedNode} graph={currentGraph} onClose={clearSelection} />
       <ContextMenu
         menu={menuState}

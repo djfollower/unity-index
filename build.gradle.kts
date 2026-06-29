@@ -39,6 +39,10 @@ dependencies {
         exclude(group = "org.slf4j")
     }
 
+    testImplementation(libs.junit.jupiter)
+    testImplementation(libs.kotlinx.serialization.json)
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
     intellijPlatform {
         rider(providers.gradleProperty("platformVersion"), useInstaller = false)
 
@@ -123,5 +127,13 @@ tasks {
         filesMatching("version.properties") {
             expand("pluginVersion" to pluginVersion.get())
         }
+    }
+
+    // Day 6 Task 11: standalone JUnit 5 tests for pure-Kotlin helpers (no
+    // IntelliJ platform fixture required). The intellijPlatform plugin owns
+    // its own integration-test task; this just lets `./gradlew test` run our
+    // plain unit tests against `GraphTraversal` etc.
+    test {
+        useJUnitPlatform()
     }
 }

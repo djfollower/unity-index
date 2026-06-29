@@ -5,12 +5,18 @@ import type {
   GraphEdge,
   GraphNode,
   GraphSnapshot,
+  GraphSourcePhase,
   NodeKind,
 } from "@unity-index/graph-core";
 import type {
   SnapshotRequest,
   SnapshotResponse,
   Warning,
+} from "@unity-index/graph-core";
+import {
+  WARNING_DANGLING_CSHARP_TARGETS,
+  WARNING_SUBFILE_KIND_IGNORED,
+  WARNING_UNRESOLVED_TARGETS,
 } from "@unity-index/graph-core";
 import * as ids from "./graphIds";
 import { parseUnityYaml, UnityYamlDocument } from "./unityYaml";
@@ -337,7 +343,7 @@ export async function buildAssetGraph(
       includeKinds.has("component_field"))
   ) {
     warnings.push({
-      code: "subfile_kind_ignored",
+      code: WARNING_SUBFILE_KIND_IGNORED,
       message:
         "component_instance and component_field are never emitted as top-level nodes; see graph-schema.md §2.3.",
     });
@@ -379,7 +385,7 @@ export async function buildAssetGraph(
 
   if (filteredEdges.some((e) => e.kind === "script_declares_class")) {
     warnings.push({
-      code: "dangling_csharp_targets",
+      code: WARNING_DANGLING_CSHARP_TARGETS,
       message:
         "script_declares_class edges point to csharp nodes that Day 2 does not emit; Day 8's code-edges harvest will materialize them.",
     });
@@ -392,7 +398,7 @@ export async function buildAssetGraph(
     0
   ) {
     warnings.push({
-      code: "unresolved_targets",
+      code: WARNING_UNRESOLVED_TARGETS,
       message:
         "Some edges referenced GUIDs not present in the project's .meta map (likely Unity built-ins or missing assets).",
       context: {
@@ -544,3 +550,29 @@ type PendingEdge =
     }
   | { kind: "scene_contains_prefab"; sceneId: string; sourceGuid: string }
   | { kind: "prefab_variant_of"; prefabId: string; sourceGuid: string };
+
+/**
+ * Shape a Day-6 subgraph result (from `neighbors` / `impact` / `context`)
+ * into a fresh `GraphSnapshot`. Re-emits `generated_at` and recomputes
+ * `stats` for the subset; `source_phase` carries over from the source.
+ * The skipped_* counters are not meaningful for a derived subgraph, so
+ * they're zeroed.
+ */
+export function subgraphResponse(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  sourcePhase: GraphSourcePhase,
+): GraphSnapshot {
+  return {
+    nodes,
+    edges,
+    generated_at: new Date().toISOString(),
+    source_phase: sourcePhase,
+    stats: {
+      node_count: nodes.length,
+      edge_count: edges.length,
+      skipped_component_instances: 0,
+      skipped_component_fields: 0,
+    },
+  };
+}

@@ -1,6 +1,6 @@
 {
   "name": "@unity-index/graph-webview",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "private": true,
   "description": "Vite + Svelte + Sigma webview app for unity-index-graph. Built and copied into both the Rider plugin and VS Code extension.",
   "type": "module",

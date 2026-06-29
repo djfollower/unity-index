@@ -42,7 +42,13 @@ The extension provides full parity with the Rider plugin (24 tools):
 `unity_get_serialized_field_values`, `unity_find_getcomponent_patterns`,
 `unity_get_api_usage`, `unity_find_asset_references`,
 `unity_graph_snapshot` (full asset-domain graph — see
-[`docs/graph-mcp-tools.md`](../docs/graph-mcp-tools.md) §3.1).
+[`docs/graph-mcp-tools.md`](../docs/graph-mcp-tools.md) §3.1),
+`unity_graph_neighbors` (N-hop subgraph around one or more nodes — see
+[`docs/graph-mcp-tools.md`](../docs/graph-mcp-tools.md) §3.2),
+`unity_graph_impact` (reverse-reachable closure with direct/transitive/weak
+classification — see [`docs/graph-mcp-tools.md`](../docs/graph-mcp-tools.md) §3.3),
+`unity_graph_context` (one node + 1-hop neighborhood, optional code summary
+and diagnostics — see [`docs/graph-mcp-tools.md`](../docs/graph-mcp-tools.md) §3.4).
 
 **Batch dispatcher**: `ide_batch` runs up to 256 tool calls in a single MCP
 request, with one shared LSP readiness probe and bounded concurrency

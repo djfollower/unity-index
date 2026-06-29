@@ -1,0 +1,563 @@
+{
+  "schema_version": 1,
+  "snapshot": {
+    "nodes": [
+      {
+        "id": "unity://script/Assets/Scripts/Player.cs",
+        "kind": "script",
+        "label": "Player.cs",
+        "metadata": {},
+        "path": "Assets/Scripts/Player.cs"
+      },
+      {
+        "id": "unity://script/Assets/Scripts/Enemy.cs",
+        "kind": "script",
+        "label": "Enemy.cs",
+        "metadata": {},
+        "path": "Assets/Scripts/Enemy.cs"
+      },
+      {
+        "id": "unity://prefab/0000000000000000000000000000aaaa",
+        "kind": "prefab",
+        "label": "Player",
+        "metadata": {},
+        "path": "Assets/Prefabs/Player.prefab"
+      },
+      {
+        "id": "unity://prefab/0000000000000000000000000000aabb",
+        "kind": "prefab_variant",
+        "label": "PlayerVariant",
+        "metadata": {},
+        "path": "Assets/Prefabs/PlayerVariant.prefab"
+      },
+      {
+        "id": "unity://prefab/0000000000000000000000000000bbbb",
+        "kind": "prefab",
+        "label": "Enemy",
+        "metadata": {},
+        "path": "Assets/Prefabs/Enemy.prefab"
+      },
+      {
+        "id": "unity://scene/0000000000000000000000000000cccc",
+        "kind": "scene",
+        "label": "Main",
+        "metadata": {},
+        "path": "Assets/Scenes/Main.unity"
+      },
+      {
+        "id": "unity://so/0000000000000000000000000000dddd",
+        "kind": "so",
+        "label": "Stats",
+        "metadata": {},
+        "path": "Assets/Data/Stats.asset"
+      },
+      {
+        "id": "unity://asset/0000000000000000000000000000eeee",
+        "kind": "asset",
+        "label": "Icon",
+        "metadata": {},
+        "path": "Assets/Art/Icon.png"
+      },
+      {
+        "id": "unity://csharp/T:Player",
+        "kind": "class",
+        "label": "Player",
+        "metadata": {}
+      },
+      {
+        "id": "unity://csharp/T:Enemy",
+        "kind": "class",
+        "label": "Enemy",
+        "metadata": {}
+      },
+      {
+        "id": "unity://csharp/T:MonoBehaviour",
+        "kind": "class",
+        "label": "MonoBehaviour",
+        "metadata": {}
+      },
+      {
+        "id": "unity://csharp/T:IDamageable",
+        "kind": "interface",
+        "label": "IDamageable",
+        "metadata": {}
+      },
+      {
+        "id": "unity://asset/0000000000000000000000000000ffff",
+        "kind": "asset",
+        "label": "Orphan",
+        "metadata": {},
+        "path": "Assets/Art/Orphan.png"
+      }
+    ],
+    "edges": [
+      {
+        "source": "unity://script/Assets/Scripts/Player.cs",
+        "target": "unity://prefab/0000000000000000000000000000aaaa",
+        "kind": "script_used_by_prefab",
+        "metadata": {}
+      },
+      {
+        "source": "unity://script/Assets/Scripts/Enemy.cs",
+        "target": "unity://prefab/0000000000000000000000000000bbbb",
+        "kind": "script_used_by_prefab",
+        "metadata": {}
+      },
+      {
+        "source": "unity://script/Assets/Scripts/Enemy.cs",
+        "target": "unity://scene/0000000000000000000000000000cccc",
+        "kind": "script_used_by_scene",
+        "metadata": {}
+      },
+      {
+        "source": "unity://scene/0000000000000000000000000000cccc",
+        "target": "unity://prefab/0000000000000000000000000000aaaa",
+        "kind": "scene_contains_prefab",
+        "metadata": {}
+      },
+      {
+        "source": "unity://scene/0000000000000000000000000000cccc",
+        "target": "unity://prefab/0000000000000000000000000000bbbb",
+        "kind": "scene_contains_prefab",
+        "metadata": {}
+      },
+      {
+        "source": "unity://prefab/0000000000000000000000000000aabb",
+        "target": "unity://prefab/0000000000000000000000000000aaaa",
+        "kind": "prefab_variant_of",
+        "metadata": {}
+      },
+      {
+        "source": "unity://prefab/0000000000000000000000000000bbbb",
+        "target": "unity://so/0000000000000000000000000000dddd",
+        "kind": "serialized_binding",
+        "metadata": {}
+      },
+      {
+        "source": "unity://prefab/0000000000000000000000000000aaaa",
+        "target": "unity://asset/0000000000000000000000000000eeee",
+        "kind": "serialized_binding",
+        "metadata": {}
+      },
+      {
+        "source": "unity://so/0000000000000000000000000000dddd",
+        "target": "unity://asset/0000000000000000000000000000eeee",
+        "kind": "serialized_binding",
+        "metadata": {}
+      },
+      {
+        "source": "unity://script/Assets/Scripts/Player.cs",
+        "target": "unity://csharp/T:Player",
+        "kind": "script_declares_class",
+        "metadata": {}
+      },
+      {
+        "source": "unity://script/Assets/Scripts/Enemy.cs",
+        "target": "unity://csharp/T:Enemy",
+        "kind": "script_declares_class",
+        "metadata": {}
+      },
+      {
+        "source": "unity://csharp/T:Player",
+        "target": "unity://csharp/T:MonoBehaviour",
+        "kind": "class_inherits_from",
+        "metadata": {}
+      },
+      {
+        "source": "unity://csharp/T:Enemy",
+        "target": "unity://csharp/T:MonoBehaviour",
+        "kind": "class_inherits_from",
+        "metadata": {}
+      },
+      {
+        "source": "unity://csharp/T:Player",
+        "target": "unity://csharp/T:IDamageable",
+        "kind": "class_implements_interface",
+        "metadata": {}
+      }
+    ],
+    "generated_at": "2026-06-29T00:00:00.000Z",
+    "source_phase": "combined",
+    "stats": {
+      "node_count": 13,
+      "edge_count": 14,
+      "skipped_component_instances": 0,
+      "skipped_component_fields": 0
+    }
+  },
+  "queries": {
+    "neighbors": [
+      {
+        "name": "in_1hop_player_prefab",
+        "request": {
+          "seeds": [
+            "unity://prefab/0000000000000000000000000000aaaa"
+          ],
+          "hops": 1,
+          "direction": "in",
+          "maxNodes": 100
+        },
+        "result": {
+          "nodeIds": [
+            "unity://prefab/0000000000000000000000000000aaaa",
+            "unity://prefab/0000000000000000000000000000aabb",
+            "unity://scene/0000000000000000000000000000cccc",
+            "unity://script/Assets/Scripts/Player.cs"
+          ],
+          "edges": [
+            {
+              "source": "unity://prefab/0000000000000000000000000000aabb",
+              "target": "unity://prefab/0000000000000000000000000000aaaa",
+              "kind": "prefab_variant_of"
+            },
+            {
+              "source": "unity://scene/0000000000000000000000000000cccc",
+              "target": "unity://prefab/0000000000000000000000000000aaaa",
+              "kind": "scene_contains_prefab"
+            },
+            {
+              "source": "unity://script/Assets/Scripts/Player.cs",
+              "target": "unity://prefab/0000000000000000000000000000aaaa",
+              "kind": "script_used_by_prefab"
+            }
+          ],
+          "truncated": false,
+          "unresolvedIds": []
+        }
+      },
+      {
+        "name": "both_2hop_player_script",
+        "request": {
+          "seeds": [
+            "unity://script/Assets/Scripts/Player.cs"
+          ],
+          "hops": 2,
+          "direction": "both",
+          "maxNodes": 100
+        },
+        "result": {
+          "nodeIds": [
+            "unity://asset/0000000000000000000000000000eeee",
+            "unity://csharp/T:IDamageable",
+            "unity://csharp/T:MonoBehaviour",
+            "unity://csharp/T:Player",
+            "unity://prefab/0000000000000000000000000000aaaa",
+            "unity://prefab/0000000000000000000000000000aabb",
+            "unity://scene/0000000000000000000000000000cccc",
+            "unity://script/Assets/Scripts/Player.cs"
+          ],
+          "edges": [
+            {
+              "source": "unity://csharp/T:Player",
+              "target": "unity://csharp/T:IDamageable",
+              "kind": "class_implements_interface"
+            },
+            {
+              "source": "unity://csharp/T:Player",
+              "target": "unity://csharp/T:MonoBehaviour",
+              "kind": "class_inherits_from"
+            },
+            {
+              "source": "unity://prefab/0000000000000000000000000000aaaa",
+              "target": "unity://asset/0000000000000000000000000000eeee",
+              "kind": "serialized_binding"
+            },
+            {
+              "source": "unity://prefab/0000000000000000000000000000aabb",
+              "target": "unity://prefab/0000000000000000000000000000aaaa",
+              "kind": "prefab_variant_of"
+            },
+            {
+              "source": "unity://scene/0000000000000000000000000000cccc",
+              "target": "unity://prefab/0000000000000000000000000000aaaa",
+              "kind": "scene_contains_prefab"
+            },
+            {
+              "source": "unity://script/Assets/Scripts/Player.cs",
+              "target": "unity://csharp/T:Player",
+              "kind": "script_declares_class"
+            },
+            {
+              "source": "unity://script/Assets/Scripts/Player.cs",
+              "target": "unity://prefab/0000000000000000000000000000aaaa",
+              "kind": "script_used_by_prefab"
+            }
+          ],
+          "truncated": false,
+          "unresolvedIds": []
+        }
+      },
+      {
+        "name": "both_1hop_main_scene",
+        "request": {
+          "seeds": [
+            "unity://scene/0000000000000000000000000000cccc"
+          ],
+          "hops": 1,
+          "direction": "both",
+          "maxNodes": 100
+        },
+        "result": {
+          "nodeIds": [
+            "unity://prefab/0000000000000000000000000000aaaa",
+            "unity://prefab/0000000000000000000000000000bbbb",
+            "unity://scene/0000000000000000000000000000cccc",
+            "unity://script/Assets/Scripts/Enemy.cs"
+          ],
+          "edges": [
+            {
+              "source": "unity://scene/0000000000000000000000000000cccc",
+              "target": "unity://prefab/0000000000000000000000000000aaaa",
+              "kind": "scene_contains_prefab"
+            },
+            {
+              "source": "unity://scene/0000000000000000000000000000cccc",
+              "target": "unity://prefab/0000000000000000000000000000bbbb",
+              "kind": "scene_contains_prefab"
+            },
+            {
+              "source": "unity://script/Assets/Scripts/Enemy.cs",
+              "target": "unity://scene/0000000000000000000000000000cccc",
+              "kind": "script_used_by_scene"
+            }
+          ],
+          "truncated": false,
+          "unresolvedIds": []
+        }
+      }
+    ],
+    "impact": [
+      {
+        "name": "player_prefab",
+        "request": {
+          "seeds": [
+            "unity://prefab/0000000000000000000000000000aaaa"
+          ]
+        },
+        "result": {
+          "nodeIds": [
+            "unity://prefab/0000000000000000000000000000aaaa",
+            "unity://prefab/0000000000000000000000000000aabb",
+            "unity://scene/0000000000000000000000000000cccc",
+            "unity://script/Assets/Scripts/Enemy.cs",
+            "unity://script/Assets/Scripts/Player.cs"
+          ],
+          "impacted": [
+            {
+              "id": "unity://prefab/0000000000000000000000000000aabb",
+              "distance": 1,
+              "reason": "prefab_variant 'PlayerVariant' is variant of 'Player'",
+              "classification": "direct"
+            },
+            {
+              "id": "unity://scene/0000000000000000000000000000cccc",
+              "distance": 1,
+              "reason": "scene 'Main' contains prefab 'Player'",
+              "classification": "direct"
+            },
+            {
+              "id": "unity://script/Assets/Scripts/Player.cs",
+              "distance": 1,
+              "reason": "script 'Player.cs' uses script 'Player'",
+              "classification": "direct"
+            },
+            {
+              "id": "unity://script/Assets/Scripts/Enemy.cs",
+              "distance": 2,
+              "reason": "script 'Enemy.cs' uses script 'Main'",
+              "classification": "transitive"
+            }
+          ]
+        }
+      },
+      {
+        "name": "icon_asset",
+        "request": {
+          "seeds": [
+            "unity://asset/0000000000000000000000000000eeee"
+          ]
+        },
+        "result": {
+          "nodeIds": [
+            "unity://asset/0000000000000000000000000000eeee",
+            "unity://prefab/0000000000000000000000000000aaaa",
+            "unity://prefab/0000000000000000000000000000aabb",
+            "unity://prefab/0000000000000000000000000000bbbb",
+            "unity://scene/0000000000000000000000000000cccc",
+            "unity://script/Assets/Scripts/Enemy.cs",
+            "unity://script/Assets/Scripts/Player.cs",
+            "unity://so/0000000000000000000000000000dddd"
+          ],
+          "impacted": [
+            {
+              "id": "unity://prefab/0000000000000000000000000000aaaa",
+              "distance": 1,
+              "reason": "prefab 'Player' references 'Icon'",
+              "classification": "weak"
+            },
+            {
+              "id": "unity://so/0000000000000000000000000000dddd",
+              "distance": 1,
+              "reason": "so 'Stats' references 'Icon'",
+              "classification": "weak"
+            },
+            {
+              "id": "unity://prefab/0000000000000000000000000000aabb",
+              "distance": 2,
+              "reason": "prefab_variant 'PlayerVariant' is variant of 'Player'",
+              "classification": "weak"
+            },
+            {
+              "id": "unity://prefab/0000000000000000000000000000bbbb",
+              "distance": 2,
+              "reason": "prefab 'Enemy' references 'Stats'",
+              "classification": "weak"
+            },
+            {
+              "id": "unity://scene/0000000000000000000000000000cccc",
+              "distance": 2,
+              "reason": "scene 'Main' contains prefab 'Player'",
+              "classification": "weak"
+            },
+            {
+              "id": "unity://script/Assets/Scripts/Player.cs",
+              "distance": 2,
+              "reason": "script 'Player.cs' uses script 'Player'",
+              "classification": "weak"
+            },
+            {
+              "id": "unity://script/Assets/Scripts/Enemy.cs",
+              "distance": 3,
+              "reason": "script 'Enemy.cs' uses script 'Main'",
+              "classification": "weak"
+            }
+          ]
+        }
+      },
+      {
+        "name": "stats_so",
+        "request": {
+          "seeds": [
+            "unity://so/0000000000000000000000000000dddd"
+          ]
+        },
+        "result": {
+          "nodeIds": [
+            "unity://prefab/0000000000000000000000000000bbbb",
+            "unity://scene/0000000000000000000000000000cccc",
+            "unity://script/Assets/Scripts/Enemy.cs",
+            "unity://so/0000000000000000000000000000dddd"
+          ],
+          "impacted": [
+            {
+              "id": "unity://prefab/0000000000000000000000000000bbbb",
+              "distance": 1,
+              "reason": "prefab 'Enemy' references 'Stats'",
+              "classification": "weak"
+            },
+            {
+              "id": "unity://scene/0000000000000000000000000000cccc",
+              "distance": 2,
+              "reason": "scene 'Main' contains prefab 'Enemy'",
+              "classification": "weak"
+            },
+            {
+              "id": "unity://script/Assets/Scripts/Enemy.cs",
+              "distance": 2,
+              "reason": "script 'Enemy.cs' uses script 'Enemy'",
+              "classification": "weak"
+            }
+          ]
+        }
+      }
+    ],
+    "context": [
+      {
+        "name": "player_prefab",
+        "request": {
+          "nodeId": "unity://prefab/0000000000000000000000000000aaaa",
+          "maxNeighbors": 50
+        },
+        "result": {
+          "nodeId": "unity://prefab/0000000000000000000000000000aaaa",
+          "incoming": [
+            {
+              "edge": {
+                "source": "unity://prefab/0000000000000000000000000000aabb",
+                "target": "unity://prefab/0000000000000000000000000000aaaa",
+                "kind": "prefab_variant_of"
+              },
+              "otherId": "unity://prefab/0000000000000000000000000000aabb"
+            },
+            {
+              "edge": {
+                "source": "unity://scene/0000000000000000000000000000cccc",
+                "target": "unity://prefab/0000000000000000000000000000aaaa",
+                "kind": "scene_contains_prefab"
+              },
+              "otherId": "unity://scene/0000000000000000000000000000cccc"
+            },
+            {
+              "edge": {
+                "source": "unity://script/Assets/Scripts/Player.cs",
+                "target": "unity://prefab/0000000000000000000000000000aaaa",
+                "kind": "script_used_by_prefab"
+              },
+              "otherId": "unity://script/Assets/Scripts/Player.cs"
+            }
+          ],
+          "outgoing": [
+            {
+              "edge": {
+                "source": "unity://prefab/0000000000000000000000000000aaaa",
+                "target": "unity://asset/0000000000000000000000000000eeee",
+                "kind": "serialized_binding"
+              },
+              "otherId": "unity://asset/0000000000000000000000000000eeee"
+            }
+          ],
+          "truncated": false
+        }
+      },
+      {
+        "name": "player_class",
+        "request": {
+          "nodeId": "unity://csharp/T:Player",
+          "maxNeighbors": 50
+        },
+        "result": {
+          "nodeId": "unity://csharp/T:Player",
+          "incoming": [
+            {
+              "edge": {
+                "source": "unity://script/Assets/Scripts/Player.cs",
+                "target": "unity://csharp/T:Player",
+                "kind": "script_declares_class"
+              },
+              "otherId": "unity://script/Assets/Scripts/Player.cs"
+            }
+          ],
+          "outgoing": [
+            {
+              "edge": {
+                "source": "unity://csharp/T:Player",
+                "target": "unity://csharp/T:IDamageable",
+                "kind": "class_implements_interface"
+              },
+              "otherId": "unity://csharp/T:IDamageable"
+            },
+            {
+              "edge": {
+                "source": "unity://csharp/T:Player",
+                "target": "unity://csharp/T:MonoBehaviour",
+                "kind": "class_inherits_from"
+              },
+              "otherId": "unity://csharp/T:MonoBehaviour"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    ]
+  }
+}

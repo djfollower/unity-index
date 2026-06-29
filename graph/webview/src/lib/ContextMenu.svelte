@@ -37,7 +37,8 @@
     const kind = typeof attrs.kind === 'string' ? attrs.kind : 'asset';
     const hasPath = typeof attrs.path === 'string' && attrs.path.length > 0;
     const hasGuid = typeof attrs.guid === 'string' && attrs.guid.length > 0;
-    return actionsForNode({ kind: kind as never, hasPath, hasGuid });
+    const hasIncomingEdges = graph.inDegree(menu.nodeId) > 0;
+    return actionsForNode({ kind: kind as never, hasPath, hasGuid, hasIncomingEdges });
   });
 
   // Pin the menu inside the viewport. Without this, right-clicks near the

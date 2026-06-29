@@ -34,6 +34,19 @@ export interface HelloGraphResponse {
 export const SNAPSHOT_GRAPH_TYPE = 'unity_graph_snapshot' as const;
 
 // ---------------------------------------------------------------------------
+// Day 6 — neighbors / impact / context. The webview does not call these over
+// the bridge today (it traverses the in-memory Graphology graph locally — see
+// graph-day6-tasks.md Task 7). The constants live here so Day 11 (saved
+// views) and Day 12 (query DSL) can route through the bridge without
+// re-declaring the wire strings. The string values MUST match
+// ToolNames.UNITY_GRAPH_* (Kotlin) and TOOL_NAMES.UNITY_GRAPH_* (TS).
+// ---------------------------------------------------------------------------
+
+export const NEIGHBORS_GRAPH_TYPE = 'unity_graph_neighbors' as const;
+export const IMPACT_GRAPH_TYPE = 'unity_graph_impact' as const;
+export const CONTEXT_GRAPH_TYPE = 'unity_graph_context' as const;
+
+// ---------------------------------------------------------------------------
 // Day 4 click-through actions. Each one is fired by the webview in response
 // to a user gesture (double-click, right-click → menu item) and routed to the
 // host through the same bridge envelope as `hello` / `snapshot`. Responses

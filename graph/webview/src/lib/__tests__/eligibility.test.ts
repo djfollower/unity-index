@@ -12,30 +12,33 @@ import {
 // until the kind is added to CODE_BEARING_KINDS.
 
 describe('eligibility.actionsForNode', () => {
-  it('hides everything for a node with no path and no GUID', () => {
+  it('shows only focus_neighborhood for a node with no path/GUID/incoming-edges', () => {
+    // focus_neighborhood is always available — Day 6 added it so users can
+    // pivot on any node, including csharp dangling targets.
     expect(
-      actionsForNode({ kind: 'script', hasPath: false, hasGuid: false }),
-    ).toEqual([]);
+      actionsForNode({ kind: 'script', hasPath: false, hasGuid: false }).map((a) => a.id),
+    ).toEqual(['focus_neighborhood']);
   });
 
   it('shows open + reveal for assets that carry path but not GUID', () => {
-    // Catch-all `asset` nodes are not code-bearing, so Find Usages stays
-    // hidden; the GUID copy item is gated on the node actually having one.
     const ids = actionsForNode({
       kind: 'asset',
       hasPath: true,
       hasGuid: false,
     }).map((a) => a.id);
-    expect(ids).toEqual(['open_file', 'reveal_in_explorer']);
+    expect(ids).toEqual(['focus_neighborhood', 'open_file', 'reveal_in_explorer']);
   });
 
-  it('shows all four actions for a script with path + GUID', () => {
+  it('shows the full set for a script with path + GUID + incoming edges', () => {
     const ids = actionsForNode({
       kind: 'script',
       hasPath: true,
       hasGuid: true,
+      hasIncomingEdges: true,
     }).map((a) => a.id);
     expect(ids).toEqual([
+      'focus_neighborhood',
+      'show_impact',
       'open_file',
       'find_usages',
       'reveal_in_explorer',
@@ -43,10 +46,19 @@ describe('eligibility.actionsForNode', () => {
     ]);
   });
 
+  it('hides show_impact for orphan leaves (no incoming edges)', () => {
+    // Day 6 Task 10 — impact on an orphan leaf would be a no-op, so the
+    // menu hides the action.
+    const ids = actionsForNode({
+      kind: 'script',
+      hasPath: true,
+      hasGuid: true,
+      hasIncomingEdges: false,
+    }).map((a) => a.id);
+    expect(ids).not.toContain('show_impact');
+  });
+
   it('hides find_usages for non-code asset kinds even when path is set', () => {
-    // Prefab / scene / SO are file-level assets that go through Reveal in
-    // Explorer or Open File, but the IDE's references panel only operates on
-    // code, so we don't show Find Usages for them.
     for (const kind of ['prefab', 'scene', 'so', 'asset'] as const) {
       const ids = actionsForNode({ kind, hasPath: true, hasGuid: true }).map(
         (a) => a.id,
@@ -61,16 +73,14 @@ describe('eligibility.actionsForNode', () => {
       kind: 'script',
       hasPath: true,
       hasGuid: true,
+      hasIncomingEdges: true,
     }).map((a) => a.id);
     expect(subset).toEqual(order); // matches the canonical sort
   });
 
-  it('marks copy_guid as the only synchronous action', () => {
-    // The menu component uses isSync to decide whether to flash a toast or
-    // wait for the bridge round-trip. Locking this here keeps the contract
-    // explicit if new actions are added.
+  it('marks copy_guid plus the Day-6 focus actions as synchronous', () => {
     const sync = ALL_ACTIONS.filter((a) => a.isSync).map((a) => a.id);
-    expect(sync).toEqual(['copy_guid']);
+    expect(sync).toEqual(['focus_neighborhood', 'show_impact', 'copy_guid']);
   });
 
   it('isEligible matches actionsForNode for every kind+facts combo', () => {
@@ -86,13 +96,15 @@ describe('eligibility.actionsForNode', () => {
     for (const kind of kinds) {
       for (const hasPath of [false, true]) {
         for (const hasGuid of [false, true]) {
-          const facts = { kind, hasPath, hasGuid };
-          const filtered = new Set(actionsForNode(facts).map((a) => a.id));
-          for (const action of ALL_ACTIONS) {
-            expect(
-              isEligible(action.id, facts),
-              `${action.id} for ${JSON.stringify(facts)}`,
-            ).toBe(filtered.has(action.id));
+          for (const hasIncomingEdges of [false, true]) {
+            const facts = { kind, hasPath, hasGuid, hasIncomingEdges };
+            const filtered = new Set(actionsForNode(facts).map((a) => a.id));
+            for (const action of ALL_ACTIONS) {
+              expect(
+                isEligible(action.id, facts),
+                `${action.id} for ${JSON.stringify(facts)}`,
+              ).toBe(filtered.has(action.id));
+            }
           }
         }
       }
