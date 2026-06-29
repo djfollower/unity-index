@@ -239,6 +239,9 @@ object UnityAssetGraphBuilder {
 
         // serialized_binding: aggregate by (owner, target).
         val bindingsAgg = LinkedHashMap<Pair<String, String>, MutableList<JsonObject>>()
+        // scene_contains_prefab: aggregate by (scene, target). The previous
+        // edges.indexOfFirst { … } scan was O(n²) on prefab-heavy scenes.
+        val sceneContainsAgg = LinkedHashMap<Pair<String, String>, Int>()
         var unresolvedSerializedBindingTargets = 0
         var unresolvedScenePrefabTargets = 0
         var unresolvedVariantTargets = 0
@@ -279,31 +282,8 @@ object UnityAssetGraphBuilder {
                         unresolvedScenePrefabTargets += 1
                         continue
                     }
-                    // Aggregate as instance_count.
-                    val existingIdx = edges.indexOfFirst {
-                        it.source == edge.sceneId && it.target == targetId && it.kind == EdgeKind.SCENE_CONTAINS_PREFAB
-                    }
-                    if (existingIdx >= 0) {
-                        val existing = edges[existingIdx]
-                        val prevCount = (existing.metadata["instance_count"] as? JsonPrimitive)
-                            ?.content?.toIntOrNull() ?: 1
-                        edges[existingIdx] = existing.copy(
-                            metadata = buildJsonObject {
-                                put("instance_count", JsonPrimitive(prevCount + 1))
-                            }
-                        )
-                    } else {
-                        edges.add(
-                            GraphEdge(
-                                source = edge.sceneId,
-                                target = targetId,
-                                kind = EdgeKind.SCENE_CONTAINS_PREFAB,
-                                metadata = buildJsonObject {
-                                    put("instance_count", JsonPrimitive(1))
-                                }
-                            )
-                        )
-                    }
+                    val key = edge.sceneId to targetId
+                    sceneContainsAgg[key] = (sceneContainsAgg[key] ?: 0) + 1
                 }
                 is PendingEdge.PrefabVariantOf -> {
                     val targetId = guidToNodeId[edge.sourceGuid]
@@ -333,6 +313,19 @@ object UnityAssetGraphBuilder {
                         put("bindings", buildJsonArray {
                             for (b in bindings) add(b)
                         })
+                    }
+                )
+            )
+        }
+
+        for ((pair, count) in sceneContainsAgg) {
+            edges.add(
+                GraphEdge(
+                    source = pair.first,
+                    target = pair.second,
+                    kind = EdgeKind.SCENE_CONTAINS_PREFAB,
+                    metadata = buildJsonObject {
+                        put("instance_count", JsonPrimitive(count))
                     }
                 )
             )

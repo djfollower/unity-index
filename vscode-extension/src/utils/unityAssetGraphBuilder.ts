@@ -239,6 +239,12 @@ export async function buildAssetGraph(
     list: Array<Record<string, unknown>>;
   }
   const bindings = new Map<string, BindingBucket>();
+  // Aggregate scene_contains_prefab by (sceneId, targetId) — the previous
+  // edges.find() scan was O(n²) on prefab-heavy scenes.
+  const sceneContains = new Map<
+    string,
+    { source: string; target: string; count: number }
+  >();
   let unresolvedSerializedBindingTargets = 0;
   let unresolvedScenePrefabTargets = 0;
   let unresolvedVariantTargets = 0;
@@ -273,24 +279,15 @@ export async function buildAssetGraph(
         unresolvedScenePrefabTargets += 1;
         continue;
       }
-      const existing = edges.find(
-        (e) =>
-          e.source === p.sceneId &&
-          e.target === targetId &&
-          e.kind === "scene_contains_prefab",
-      );
+      const key = `${p.sceneId}|${targetId}`;
+      const existing = sceneContains.get(key);
       if (existing) {
-        const prev =
-          typeof existing.metadata.instance_count === "number"
-            ? existing.metadata.instance_count
-            : 1;
-        existing.metadata.instance_count = prev + 1;
+        existing.count += 1;
       } else {
-        edges.push({
+        sceneContains.set(key, {
           source: p.sceneId,
           target: targetId,
-          kind: "scene_contains_prefab",
-          metadata: { instance_count: 1 },
+          count: 1,
         });
       }
     } else if (p.kind === "prefab_variant_of") {
@@ -314,6 +311,15 @@ export async function buildAssetGraph(
       target: bucket.target,
       kind: "serialized_binding",
       metadata: { bindings: bucket.list },
+    });
+  }
+
+  for (const bucket of sceneContains.values()) {
+    edges.push({
+      source: bucket.source,
+      target: bucket.target,
+      kind: "scene_contains_prefab",
+      metadata: { instance_count: bucket.count },
     });
   }
 
