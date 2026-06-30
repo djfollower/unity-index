@@ -112,10 +112,11 @@
 <style>
   .panel {
     position: absolute;
-    top: 12px;
+    /* Wide: slot below the SearchBar (which sits at top:10 + ~32 tall + gap → 52). */
+    top: 52px;
     right: 12px;
     width: 280px;
-    max-height: calc(100% - 24px);
+    max-height: calc(100% - 64px);
     overflow: auto;
     background: rgba(28, 28, 28, 0.96);
     border: 1px solid #333;
@@ -125,7 +126,21 @@
     font-size: 12px;
     line-height: 1.45;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-    z-index: 2;
+    /* Above all chrome (chrome uses z-index:5). */
+    z-index: 10;
+  }
+  /* Narrow: anchor to bottom-left so the chrome stack at the top stays
+     visible and the panel doesn't compete with SearchBar for the top row.
+     Leaves bottom-right clear for the Legend. */
+  @media (max-width: 760px) {
+    .panel {
+      top: auto;
+      right: 150px;
+      bottom: 10px;
+      left: 10px;
+      width: auto;
+      max-height: 50%;
+    }
   }
   .head {
     display: flex;

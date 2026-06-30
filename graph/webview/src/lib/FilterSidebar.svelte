@@ -65,15 +65,25 @@
 
 {#if rows.length > 0}
   <aside class="sidebar" class:collapsed>
-    <button class="collapse" onclick={() => (collapsed = !collapsed)} title={collapsed ? 'Show filters' : 'Hide filters'}>
-      {collapsed ? '›' : '‹'}
-    </button>
-    {#if !collapsed}
+    {#if collapsed}
+      <!-- Strip-mode: a single tall button so any click on the 24px strip
+           re-expands the sidebar; vertical "Filter" hint makes the affordance
+           obvious without an icon glossary. -->
+      <button class="strip" onclick={() => (collapsed = false)} title="Show filters">
+        <span class="strip-label">▸ Filter</span>
+      </button>
+    {:else}
       <header>
         <span class="title">Filter</span>
         <div class="bulk">
           <button onclick={showAll} disabled={!anyHidden}>Show all</button>
           <button onclick={hideAll} disabled={rows.length === 0}>Hide all</button>
+          <button
+            class="hide-toggle"
+            onclick={() => (collapsed = true)}
+            title="Collapse filter panel"
+            aria-label="Collapse filter panel"
+          >–</button>
         </div>
       </header>
       <Presets {standalone} busy={presetBusy} {onShowMonoBehaviours} />
@@ -132,22 +142,39 @@
       right: auto;
     }
   }
-  .collapse {
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 18px;
-    height: 18px;
+  .strip {
+    /* Whole-strip button when collapsed — easier hit target than the old
+       18px icon. Vertical "Filter" label so the affordance is unambiguous. */
+    width: 100%;
+    height: 100%;
     border: none;
     background: transparent;
-    color: #aaa;
+    color: #ddd;
     cursor: pointer;
+    padding: 8px 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  .strip:hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .strip-label {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #aaa;
+    font-weight: 600;
+  }
+  .hide-toggle {
+    /* Compact "–" button inline with Show all / Hide all so users find the
+       collapse action by looking at the same row as the bulk actions. */
+    flex: 0 0 22px !important;
+    padding: 0 !important;
     font-size: 14px;
     line-height: 1;
-    padding: 0;
-  }
-  .collapse:hover {
-    color: #fff;
   }
   header {
     padding: 8px 10px;
