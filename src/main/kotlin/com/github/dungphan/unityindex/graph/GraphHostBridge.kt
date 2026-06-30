@@ -104,20 +104,48 @@ class GraphHostBridge(
 
     private fun sendToWebview(env: BridgeEnvelope) {
         val payloadJson = json.encodeToString(BridgeEnvelope.serializer(), env)
-        // JSON-quote the payload so it survives embedding in a JS string
-        // literal without further escaping.
-        val jsStringLiteral = json.encodeToString(String.serializer(), payloadJson)
+        // CEF's executeJavaScript parses the entire script through V8. On big
+        // Unity projects the snapshot JSON is multi-MB; injecting it as a
+        // single string literal silently truncates or crashes the renderer
+        // (symptom: gray blank panel, no logs). Split into chunks well under
+        // any practical V8 source-size cliff and reassemble on the JS side.
+        val messageId = env.id ?: "evt-${nextEventId.incrementAndGet()}"
+        val total = (payloadJson.length + CHUNK_BYTES - 1) / CHUNK_BYTES
+        ApplicationManager.getApplication().invokeLater {
+            if (total <= 1) {
+                emitChunk(messageId, 0, 1, payloadJson)
+                return@invokeLater
+            }
+            var i = 0
+            var offset = 0
+            while (offset < payloadJson.length) {
+                val end = minOf(offset + CHUNK_BYTES, payloadJson.length)
+                emitChunk(messageId, i, total, payloadJson.substring(offset, end))
+                offset = end
+                i++
+            }
+        }
+    }
+
+    private fun emitChunk(messageId: String, index: Int, total: Int, chunk: String) {
+        val idLit = json.encodeToString(String.serializer(), messageId)
+        val chunkLit = json.encodeToString(String.serializer(), chunk)
         val script = """
-            if (window.unityIndex && typeof window.unityIndex.fromHost === 'function') {
-              window.unityIndex.fromHost($jsStringLiteral);
+            if (window.unityIndex && typeof window.unityIndex.fromHostChunk === 'function') {
+              window.unityIndex.fromHostChunk($idLit, $index, $total, $chunkLit);
+            } else if (window.unityIndex && typeof window.unityIndex.fromHost === 'function' && $total === 1) {
+              window.unityIndex.fromHost($chunkLit);
             }
         """.trimIndent()
-        ApplicationManager.getApplication().invokeLater {
-            browser.cefBrowser.executeJavaScript(script, browser.cefBrowser.url, 0)
-        }
+        browser.cefBrowser.executeJavaScript(script, browser.cefBrowser.url, 0)
     }
 
     companion object {
         private val LOG = logger<GraphHostBridge>()
+        // 128 KiB per chunk. Leaves comfortable headroom below CEF/V8's
+        // pathological large-source thresholds while keeping the chunk count
+        // bounded (a 50 MB payload is ~400 chunks).
+        private const val CHUNK_BYTES = 128 * 1024
+        private val nextEventId = java.util.concurrent.atomic.AtomicLong(0)
     }
 }
