@@ -9,14 +9,27 @@
 
   import { filterStore } from './filterStore.svelte';
   import { nodeStyleFor } from './style';
+  import Presets from './Presets.svelte';
 
   interface Props {
     /** Map of kind → node count, derived from the current Graphology graph
      *  by `collectPresentKinds`. Recomputed by App.svelte on snapshot load. */
     presentKinds: Map<string, number>;
+    /** Day 9.3 — true when no host bridge is present (standalone dev mode).
+     *  Disables presets that need to round-trip to the LSP/RD. */
+    standalone: boolean;
+    /** Day 9.3 — true while a preset fetch is in flight; disables the
+     *  preset buttons and shows a loading label. */
+    presetBusy: boolean;
+    onShowMonoBehaviours: () => void;
   }
 
-  let { presentKinds }: Props = $props();
+  let {
+    presentKinds,
+    standalone,
+    presetBusy,
+    onShowMonoBehaviours,
+  }: Props = $props();
   let collapsed = $state(false);
 
   // Stable display order: assets first (most common), then code kinds. Within
@@ -63,6 +76,7 @@
           <button onclick={hideAll} disabled={rows.length === 0}>Hide all</button>
         </div>
       </header>
+      <Presets {standalone} busy={presetBusy} {onShowMonoBehaviours} />
       <ul>
         {#each rows as row (row.kind)}
           <li>
@@ -102,6 +116,21 @@
   }
   .sidebar.collapsed {
     width: 24px;
+  }
+  /* Day 9 — narrow mode: slot below toggle (top:10, ~34h) + search
+     (top:50, ~32h) + gap → top: 92. Take the full canvas width. */
+  @media (max-width: 760px) {
+    .sidebar {
+      top: 92px;
+      left: 10px;
+      right: 10px;
+      width: auto;
+      max-height: calc(100% - 102px);
+    }
+    .sidebar.collapsed {
+      width: 24px;
+      right: auto;
+    }
   }
   .collapse {
     position: absolute;

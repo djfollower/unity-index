@@ -29,16 +29,18 @@ export const NODE_STYLE = {
   asset: { color: '#888888', size: 6 },
   addressable_group: { color: '#dd5577', size: 10 },
 
-  // Code domain — Day 8 emits these. Pre-mapped now so an accidental emit
-  // doesn't crash the renderer; Day 9 owns the real palette.
-  namespace: { color: '#cccccc', size: 4 },
-  class: { color: '#cccccc', size: 4 },
-  interface: { color: '#cccccc', size: 4 },
-  struct: { color: '#cccccc', size: 4 },
-  enum: { color: '#cccccc', size: 4 },
-  method: { color: '#cccccc', size: 4 },
-  property: { color: '#cccccc', size: 4 },
-  field: { color: '#cccccc', size: 4 },
+  // Code domain — Day 9 palette. Picked to read against the dark `#181818`
+  // canvas and to keep the asset palette (warm orange scripts, blue prefabs,
+  // green scenes, purple SOs) visually distinct from the code palette
+  // (cool blues and accents).
+  namespace: { color: '#999999', size: 5 },
+  class: { color: '#88ccff', size: 8 },
+  interface: { color: '#c4a3ff', size: 7 },
+  struct: { color: '#66b8c2', size: 6 },
+  enum: { color: '#ddaa55', size: 6 },
+  method: { color: '#ffb86b', size: 4 },
+  property: { color: '#a3d977', size: 4 },
+  field: { color: '#7a8aa8', size: 3 },
 
   // Sub-file kinds — never rendered as top-level nodes (schema rule).
   // Mapping exists only so an accidental emit doesn't throw at lookup time.
@@ -56,12 +58,20 @@ export const EDGE_STYLE = {
   // Declaration, not a reference — softer line, no arrow.
   script_declares_class: { color: '#aaaaaa', type: 'line', size: 0.5 },
 
-  // Code domain — Day 9 owns the real palette.
-  class_inherits_from: { color: '#555555', type: 'arrow', size: 0.8 },
-  class_implements_interface: { color: '#555555', type: 'arrow', size: 0.8 },
-  method_overrides_method: { color: '#555555', type: 'arrow', size: 0.8 },
-  method_calls_method: { color: '#555555', type: 'arrow', size: 0.8 },
-  class_references_class: { color: '#555555', type: 'arrow', size: 0.8 },
+  // Code domain — Day 9 palette. Inheritance / implements / overrides share
+  // a cool-blue family (they're all "is-a / replaces" relationships); calls
+  // are warm amber (the noisiest edge kind, so kept thin and slightly
+  // muted); generic references fall back to grey at the lowest weight so
+  // they don't dominate the canvas.
+  //
+  // NOTE: Sigma's default edge program doesn't render dashed lines. The
+  // plan called for dashed `class_implements_interface`; we use a lighter
+  // blue tint instead and defer custom edge programs to Day 14 polish.
+  class_inherits_from: { color: '#6aa3ff', type: 'arrow', size: 1.4 },
+  class_implements_interface: { color: '#a3c4ff', type: 'arrow', size: 1.2 },
+  method_overrides_method: { color: '#4fd1c5', type: 'arrow', size: 1.2 },
+  method_calls_method: { color: '#ffb86b', type: 'arrow', size: 0.8 },
+  class_references_class: { color: '#7a7a7a', type: 'arrow', size: 0.6 },
 
   // Mostly-internal edges (schema §3.1).
   guid_resolves_to: { color: '#666666', type: 'arrow', size: 0.8 },

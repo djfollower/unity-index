@@ -25,6 +25,11 @@ class GraphFilterStateService : PersistentStateComponent<GraphFilterStateService
     data class Inner(
         var hiddenKinds: MutableList<String> = mutableListOf(),
         var search: String = "",
+        // Day 9 — domain toggle (assets|code|combined). Stored as a free-form
+        // string so an older webview that doesn't know about the field still
+        // round-trips it; the dispatch layer + webview both coerce unknown
+        // values to "combined".
+        var domain: String = "combined",
     )
 
     private var inner = Inner()
@@ -38,12 +43,14 @@ class GraphFilterStateService : PersistentStateComponent<GraphFilterStateService
     fun read(): Inner = Inner(
         hiddenKinds = inner.hiddenKinds.toMutableList(),
         search = inner.search,
+        domain = inner.domain,
     )
 
-    fun write(hiddenKinds: List<String>, search: String) {
+    fun write(hiddenKinds: List<String>, search: String, domain: String) {
         inner = Inner(
             hiddenKinds = hiddenKinds.toMutableList(),
             search = search,
+            domain = domain,
         )
     }
 

@@ -276,11 +276,14 @@ Batch C# edge lookup. **Load-bearing for Phase 2 perf** — replaces N round-tri
 **Input**
 ```ts
 interface CodeEdgesRequest extends BaseRequest {
-  symbol_ids: string[];            // 1..500; unity://csharp/... IDs
+  symbol_ids?: string[];           // 1..500; unity://csharp/... IDs. Optional when subtypes_of is set.
   edge_kinds?: ('class_inherits_from' | 'class_implements_interface'
               | 'method_overrides_method' | 'method_calls_method'
               | 'class_references_class')[];   // default: all
   include_targets?: boolean;       // default true; if false, returns edges only (target nodes assumed already known to caller)
+  // Day 9.3 — transitive subtypes preset.
+  subtypes_of?: string;            // unity://csharp/T:Ns.Type id; walks subtypes via the type-hierarchy provider.
+  subtypes_max_depth?: number;     // BFS depth cap. Default 8, clamped to 16.
 }
 ```
 
@@ -289,6 +292,8 @@ interface CodeEdgesRequest extends BaseRequest {
 interface CodeEdgesResponse extends BaseResponse {
   snapshot: GraphSnapshot;         // nodes (if include_targets) + edges
   unresolved_ids?: string[];       // symbol IDs we couldn't resolve (stale/refactored)
+  // BaseResponse.warnings may carry { code: 'subtypes_truncated', ... } when
+  // the subtypes_of BFS hit CODE_EDGES_MAX_SUBTYPES (2000) or the depth cap.
 }
 ```
 
@@ -298,6 +303,7 @@ interface CodeEdgesResponse extends BaseResponse {
 - Symbol IDs that can't be resolved go to `unresolved_ids[]`, not errors — partial success is acceptable.
 - Pair with `unity_graph_snapshot` using `include_class_anchors=true` (Day 8.4) so the webview has stable `unity://csharp/T:...` node IDs to attach the response edges to.
 - The webview also routes through this tool via an in-process bridge handler (`unity_graph_code_edges` wire type) so a click-to-expand never goes over HTTP.
+- **`subtypes_of` (Day 9.3):** when set to a `unity://csharp/T:Ns.Type` id, the host BFSes the type-hierarchy provider's subtypes from that root and emits inheritance edges from each subclass back to its *immediate* parent (preserving tree shape, not collapsing to a star). The edge kind on each `subclass → parent` edge follows the parent's symbol kind — `class_implements_interface` when the parent is an interface, `class_inherits_from` otherwise. Capped at `CODE_EDGES_MAX_SUBTYPES = 2000` visited nodes and the supplied depth (default 8, clamped to 16); truncation surfaces as a `subtypes_truncated` warning carrying `{ root, visited, max_depth, reason }`. `symbol_ids` may be empty when `subtypes_of` is the only seed; otherwise the per-symbol harvest still runs and results are merged. This is the host-side power for the webview's "Show MonoBehaviour subclasses" preset.
 
 **Known gaps (carry-forward, tracked for a follow-up release)**
 - `method_calls_method.metadata.call_sites[].kind` defaults to `'direct'` on both hosts. Rider's `CallElementData` doesn't surface dispatch kind, and Roslyn LSP doesn't expose it through `executeCallHierarchyProvider`. Tightening needs PSI/semantic-tokens inspection of each call expression.

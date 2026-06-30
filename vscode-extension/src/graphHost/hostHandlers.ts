@@ -119,14 +119,19 @@ function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === "string");
 }
 
+function coerceDomain(raw: unknown): FilterState["domain"] {
+  return raw === "assets" || raw === "code" || raw === "combined" ? raw : "combined";
+}
+
 function coerceFilterState(raw: unknown): FilterState {
   if (raw && typeof raw === "object") {
     const r = raw as Record<string, unknown>;
     const hiddenKinds = isStringArray(r.hiddenKinds) ? r.hiddenKinds : [];
     const search = typeof r.search === "string" ? r.search : "";
-    return { hiddenKinds, search };
+    const domain = coerceDomain(r.domain);
+    return { hiddenKinds, search, domain };
   }
-  return { hiddenKinds: [], search: "" };
+  return { hiddenKinds: [], search: "", domain: "combined" };
 }
 
 function handleGetFilterState(ctx: HostHandlerContext): GetFilterStateResponse {

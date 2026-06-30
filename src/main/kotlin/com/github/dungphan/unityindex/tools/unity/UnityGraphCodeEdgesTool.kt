@@ -65,6 +65,21 @@ class UnityGraphCodeEdgesTool : AbstractMcpTool() {
          *  if they care about long-tail enclosing types. */
         const val CLASS_REFERENCES_HIT_LIMIT = 5000
 
+        /** Day 9.3 — transitive-subtypes preset cap. Must match
+         *  CODE_EDGES_MAX_SUBTYPES on the TS wire side. */
+        const val CODE_EDGES_MAX_SUBTYPES = 2000
+
+        /** Day 9.3 — default depth for `subtypes_of` BFS. Matches
+         *  CODE_EDGES_DEFAULT_SUBTYPES_MAX_DEPTH on the TS side. */
+        const val DEFAULT_SUBTYPES_MAX_DEPTH = 8
+
+        /** Day 9.3 — hard ceiling for a client-supplied `subtypes_max_depth`.
+         *  Keeps a malicious or buggy request from forcing an unbounded walk
+         *  even if [CODE_EDGES_MAX_SUBTYPES] hasn't fired yet. 16 is well
+         *  past any realistic Unity / .NET inheritance chain (MonoBehaviour
+         *  hierarchies in shipped Asset-Store packages top out around 6). */
+        const val MAX_SUBTYPES_DEPTH_CLAMP = 16
+
         /** Day 8.5 — bridge-friendly synchronous entry point used by the
          *  graph webview's lazy expansion. Caller must already be off the
          *  EDT (we acquire a platform read lock). Throws
@@ -74,8 +89,9 @@ class UnityGraphCodeEdgesTool : AbstractMcpTool() {
          *  other failure propagates as-is. The MCP `doExecute` path keeps
          *  its own typed error-envelope handling and does not call this. */
         fun runDirect(project: Project, request: CodeEdgesRequest): CodeEdgesResponse {
-            if (request.symbol_ids.isEmpty()) {
-                throw IllegalArgumentException("invalid_id: symbol_ids must contain at least one entry")
+            val hasSubtypes = !request.subtypes_of.isNullOrBlank()
+            if (request.symbol_ids.isEmpty() && !hasSubtypes) {
+                throw IllegalArgumentException("invalid_id: symbol_ids must contain at least one entry (or set subtypes_of)")
             }
             if (request.symbol_ids.size > CODE_EDGES_MAX_SYMBOLS) {
                 throw IllegalArgumentException("invalid_arguments: symbol_ids has ${request.symbol_ids.size} entries, max $CODE_EDGES_MAX_SYMBOLS")
@@ -84,16 +100,26 @@ class UnityGraphCodeEdgesTool : AbstractMcpTool() {
                 CSharpSymbolResolver.parse(raw)
                     ?: throw IllegalArgumentException("invalid_id: symbol_id '$raw' must be non-empty and start with '${CSharpSymbolResolver.PREFIX}'")
             }
+            val subtypesRoot: CSharpSymbolResolver.ParsedSymbolId? = if (hasSubtypes) {
+                val parsedRoot = CSharpSymbolResolver.parse(request.subtypes_of!!)
+                    ?: throw IllegalArgumentException("invalid_id: subtypes_of '${request.subtypes_of}' must be non-empty and start with '${CSharpSymbolResolver.PREFIX}'")
+                if (parsedRoot.kind != CSharpSymbolResolver.SymbolKind.TYPE) {
+                    throw IllegalArgumentException("invalid_id: subtypes_of must be a type id (T:...), got kind=${parsedRoot.kind}")
+                }
+                parsedRoot
+            } else null
             val kindFilter: Set<EdgeKind> = request.edge_kinds
                 ?.filter { it in ALLOWED_KINDS }
                 ?.toSet()
                 ?: ALLOWED_KINDS
             val includeTargets = request.include_targets ?: true
+            val maxDepth = clampSubtypesDepth(request.subtypes_max_depth)
 
             val tool = UnityGraphCodeEdgesTool()
-            val (edges, nodes, unresolved) = ReadAction.compute<Triple<List<GraphEdge>, List<GraphNode>, List<String>>, Throwable> {
-                tool.harvest(project, parsed, kindFilter, includeTargets)
-            }
+            val (edges, nodes, unresolved, truncation) =
+                ReadAction.compute<HarvestResult, Throwable> {
+                    tool.harvestAll(project, parsed, subtypesRoot, kindFilter, includeTargets, maxDepth)
+                }
             val generatedAt = java.time.Instant.now().toString()
             val snapshot = GraphSnapshot(
                 nodes = nodes,
@@ -110,10 +136,15 @@ class UnityGraphCodeEdgesTool : AbstractMcpTool() {
             return CodeEdgesResponse(
                 request_id = request.request_id,
                 generated_at = generatedAt,
-                warnings = null,
+                warnings = truncation?.let { listOf(it) },
                 snapshot = snapshot,
                 unresolved_ids = unresolved.takeIf { it.isNotEmpty() },
             )
+        }
+
+        private fun clampSubtypesDepth(raw: Int?): Int {
+            val v = raw ?: DEFAULT_SUBTYPES_MAX_DEPTH
+            return v.coerceIn(1, MAX_SUBTYPES_DEPTH_CLAMP)
         }
 
         private val ALLOWED_KINDS = setOf(
@@ -135,9 +166,11 @@ class UnityGraphCodeEdgesTool : AbstractMcpTool() {
         Edge kinds: class_inherits_from, class_implements_interface, method_overrides_method, method_calls_method, class_references_class. `method_calls_method.metadata.call_sites` is a list of { line, kind: direct|virtual|interface|delegate } entries.
 
         Parameters:
-        - symbol_ids (required): 1..$CODE_EDGES_MAX_SYMBOLS `unity://csharp/<DocumentationCommentId>` strings.
+        - symbol_ids: 1..$CODE_EDGES_MAX_SYMBOLS `unity://csharp/<DocumentationCommentId>` strings. Required unless `subtypes_of` is set.
         - edge_kinds (optional): filter to specific edge kinds.
         - include_targets (optional, default true): when false, `snapshot.nodes` is empty (edges only).
+        - subtypes_of (optional): `unity://csharp/T:Ns.Type` id. When set, the tool walks the type-hierarchy provider's subtypes transitively from this root and returns inheritance edges from each subclass back to its immediate parent. Capped at $CODE_EDGES_MAX_SUBTYPES visited nodes; truncation surfaces as a `subtypes_truncated` warning.
+        - subtypes_max_depth (optional): depth cap for the `subtypes_of` BFS. Default $DEFAULT_SUBTYPES_MAX_DEPTH, clamped to $MAX_SUBTYPES_DEPTH_CLAMP.
         - project_path (optional): only needed when multiple projects are open.
 
         Symbols that parse cleanly but don't resolve come back in `unresolved_ids` rather than erroring (partial success).
@@ -149,13 +182,18 @@ class UnityGraphCodeEdgesTool : AbstractMcpTool() {
             put("type", JsonPrimitive("array"))
             put("description", JsonPrimitive("1..$CODE_EDGES_MAX_SYMBOLS `unity://csharp/<DocumentationCommentId>` IDs (e.g. `unity://csharp/T:Foo.Bar`, `unity://csharp/M:Foo.Bar.Baz(System.Int32)`)."))
             put("items", buildJsonObject { put("type", JsonPrimitive("string")) })
-        }, required = true)
+        }, required = false)
         .property("edge_kinds", buildJsonObject {
             put("type", JsonPrimitive("array"))
             put("description", JsonPrimitive("Filter — only return edges of these kinds. Omit/empty for all five."))
             put("items", buildJsonObject { put("type", JsonPrimitive("string")) })
         })
         .booleanProperty("include_targets", "Default true. When false, `snapshot.nodes` is empty and edges only are returned.")
+        .stringProperty("subtypes_of", "Optional `unity://csharp/T:Ns.Type` root. When set, the tool walks the type-hierarchy provider's subtypes transitively and returns the resulting inheritance edges (capped at $CODE_EDGES_MAX_SUBTYPES nodes / $MAX_SUBTYPES_DEPTH_CLAMP depth).")
+        .property("subtypes_max_depth", buildJsonObject {
+            put("type", JsonPrimitive("integer"))
+            put("description", JsonPrimitive("Depth cap for the `subtypes_of` BFS. Default $DEFAULT_SUBTYPES_MAX_DEPTH, clamped to $MAX_SUBTYPES_DEPTH_CLAMP."))
+        })
         .stringProperty("request_id", "Optional; echoed back on the response for client correlation.")
         .build()
 
@@ -171,8 +209,9 @@ class UnityGraphCodeEdgesTool : AbstractMcpTool() {
             })
         }
 
-        if (request.symbol_ids.isEmpty()) {
-            return invalidIdError("symbol_ids must contain at least one entry")
+        val hasSubtypes = !request.subtypes_of.isNullOrBlank()
+        if (request.symbol_ids.isEmpty() && !hasSubtypes) {
+            return invalidIdError("symbol_ids must contain at least one entry (or set subtypes_of)")
         }
         if (request.symbol_ids.size > CODE_EDGES_MAX_SYMBOLS) {
             return createStructuredErrorResult(buildJsonObject {
@@ -192,20 +231,31 @@ class UnityGraphCodeEdgesTool : AbstractMcpTool() {
             parsed.add(p)
         }
 
+        val subtypesRoot: CSharpSymbolResolver.ParsedSymbolId? = if (hasSubtypes) {
+            val raw = request.subtypes_of!!
+            val parsedRoot = CSharpSymbolResolver.parse(raw)
+                ?: return invalidIdError("subtypes_of '$raw' must be non-empty and start with '${CSharpSymbolResolver.PREFIX}'")
+            if (parsedRoot.kind != CSharpSymbolResolver.SymbolKind.TYPE) {
+                return invalidIdError("subtypes_of must be a type id (T:...), got kind=${parsedRoot.kind}")
+            }
+            parsedRoot
+        } else null
+
         val kindFilter: Set<EdgeKind> = request.edge_kinds
             ?.filter { it in ALLOWED_KINDS }
             ?.toSet()
             ?: ALLOWED_KINDS
         val includeTargets = request.include_targets ?: true
+        val maxDepth = clampSubtypesDepth(request.subtypes_max_depth)
 
         requireSmartMode(project)
 
         // Single read action: PSI lookups + hierarchy walks. PlatformFallbacks
         // touches HierarchyProvider / FindUsagesHandler — both require a read
         // lock. Run off the EDT to avoid freezing the UI on large fan-outs.
-        val (edges, nodes, unresolved) = withContext(Dispatchers.IO) {
-            ReadAction.compute<Triple<List<GraphEdge>, List<GraphNode>, List<String>>, Throwable> {
-                harvest(project, parsed, kindFilter, includeTargets)
+        val (edges, nodes, unresolved, truncation) = withContext(Dispatchers.IO) {
+            ReadAction.compute<HarvestResult, Throwable> {
+                harvestAll(project, parsed, subtypesRoot, kindFilter, includeTargets, maxDepth)
             }
         }
 
@@ -224,7 +274,7 @@ class UnityGraphCodeEdgesTool : AbstractMcpTool() {
         val response = CodeEdgesResponse(
             request_id = request.request_id,
             generated_at = snapshot.generated_at,
-            warnings = null,
+            warnings = truncation?.let { listOf(it) },
             snapshot = snapshot,
             unresolved_ids = unresolved.takeIf { it.isNotEmpty() },
         )
@@ -241,12 +291,29 @@ class UnityGraphCodeEdgesTool : AbstractMcpTool() {
 
     private data class EdgeKey(val source: String, val target: String, val kind: EdgeKind)
 
-    private fun harvest(
+    /** Composite return for [harvestAll]. The truncation slot carries the
+     *  optional `subtypes_truncated` warning so callers don't have to know
+     *  whether the BFS bailed early. */
+    internal data class HarvestResult(
+        val edges: List<GraphEdge>,
+        val nodes: List<GraphNode>,
+        val unresolved: List<String>,
+        val truncation: com.github.dungphan.unityindex.tools.models.GraphWarning?,
+    )
+
+    /** Combined entry point used by both the MCP path and the bridge
+     *  `runDirect` path. Runs the existing per-symbol harvest, then
+     *  optionally appends a transitive-subtypes BFS rooted at [subtypesRoot]
+     *  (Day 9.3). All accumulators are shared so a single response carries
+     *  both flavours of result. */
+    internal fun harvestAll(
         project: Project,
         ids: List<CSharpSymbolResolver.ParsedSymbolId>,
+        subtypesRoot: CSharpSymbolResolver.ParsedSymbolId?,
         kindFilter: Set<EdgeKind>,
         includeTargets: Boolean,
-    ): Triple<List<GraphEdge>, List<GraphNode>, List<String>> {
+        subtypesMaxDepth: Int,
+    ): HarvestResult {
         val edges = linkedMapOf<EdgeKey, GraphEdge>()
         val nodes = linkedMapOf<String, GraphNode>()
         val unresolved = mutableListOf<String>()
@@ -269,7 +336,176 @@ class UnityGraphCodeEdgesTool : AbstractMcpTool() {
             }
         }
 
-        return Triple(edges.values.toList(), if (includeTargets) nodes.values.toList() else emptyList(), unresolved)
+        var truncation: com.github.dungphan.unityindex.tools.models.GraphWarning? = null
+        if (subtypesRoot != null) {
+            val resolvedRoot = CSharpSymbolResolver.resolve(project, subtypesRoot)
+            if (resolvedRoot == null) {
+                unresolved.add(subtypesRoot.raw)
+            } else {
+                try {
+                    truncation = collectSubtypes(
+                        project = project,
+                        rootElement = resolvedRoot.element,
+                        rootTypeName = subtypesRoot.typeName,
+                        maxDepth = subtypesMaxDepth,
+                        kindFilter = kindFilter,
+                        edges = edges,
+                        nodes = nodes,
+                        includeTargets = includeTargets,
+                    )
+                } catch (e: Throwable) {
+                    LOG.debug("subtypes BFS failed for ${subtypesRoot.raw}: ${e.message}", e)
+                    unresolved.add(subtypesRoot.raw)
+                }
+            }
+        }
+
+        return HarvestResult(
+            edges = edges.values.toList(),
+            nodes = if (includeTargets) nodes.values.toList() else emptyList(),
+            unresolved = unresolved,
+            truncation = truncation,
+        )
+    }
+
+    /** Day 9.3 — BFS the type-hierarchy provider's subtypes from
+     *  [rootElement], emitting `class_inherits_from` (or
+     *  `class_implements_interface` when the parent at that edge is an
+     *  interface) edges directed from each subclass back toward its
+     *  *immediate* parent. The graph is the actual tree, not a star around
+     *  the root.
+     *
+     *  Termination: bounded by [maxDepth] levels and
+     *  [CODE_EDGES_MAX_SUBTYPES] visited nodes (the root counts). When
+     *  either fires before the hierarchy is exhausted, the call returns a
+     *  `subtypes_truncated` warning instead of throwing — partial results
+     *  are still useful to the caller.
+     *
+     *  Returns the truncation warning if hit, null otherwise. */
+    private fun collectSubtypes(
+        project: Project,
+        rootElement: com.intellij.psi.PsiElement,
+        rootTypeName: String,
+        maxDepth: Int,
+        kindFilter: Set<EdgeKind>,
+        edges: MutableMap<EdgeKey, GraphEdge>,
+        nodes: MutableMap<String, GraphNode>,
+        includeTargets: Boolean,
+    ): com.github.dungphan.unityindex.tools.models.GraphWarning? {
+        val edgeKindNeeded = EdgeKind.CLASS_INHERITS_FROM in kindFilter ||
+            EdgeKind.CLASS_IMPLEMENTS_INTERFACE in kindFilter
+        if (!edgeKindNeeded) return null
+
+        val rootId = CSharpSymbolResolver.typeId(rootTypeName)
+        // First hierarchy lookup also tells us whether the root is an
+        // interface; that decides the edge kind for child→root edges.
+        val rootHierarchy = LanguageHandlerRegistry.getTypeHierarchyHandler(rootElement)
+            ?.getTypeHierarchy(rootElement, project, BuiltInSearchScope.PROJECT_FILES, false)
+            ?: PlatformFallbacks.getTypeHierarchy(rootElement, project, BuiltInSearchScope.PROJECT_FILES, false)
+            ?: return null
+        if (includeTargets) {
+            val rootNodeKind = nodeKindFor(rootHierarchy.element.kind)
+            nodes.putIfAbsent(rootId, typeNode(rootId, rootTypeName, rootNodeKind))
+        }
+
+        // Queue carries the parent type + its PSI element + the depth at
+        // which we visit it. We BFS so depth limits hit the broadest level
+        // first; truncation cuts the deepest tier, never an arbitrary
+        // subset of one level.
+        data class Frame(
+            val element: com.intellij.psi.PsiElement,
+            val typeName: String,
+            val typeKind: String,
+            val depth: Int,
+        )
+        val queue: ArrayDeque<Frame> = ArrayDeque()
+        queue.addLast(Frame(rootElement, rootTypeName, rootHierarchy.element.kind, 0))
+
+        // Visit set tracks both directions: keeps us from cycling and from
+        // re-issuing hierarchy lookups for a class that's already been
+        // expanded through a different parent (diamond inheritance via
+        // interfaces).
+        val visited = mutableSetOf(rootTypeName)
+        var truncated = false
+        var truncatedReason = ""
+
+        while (queue.isNotEmpty() && !truncated) {
+            ProgressManager.checkCanceled()
+            val frame = queue.removeFirst()
+            if (frame.depth >= maxDepth) {
+                // We never expand past maxDepth — but we don't truncate
+                // unless there's more to expand. Mark only if at least one
+                // node at the cap had unexpanded subtypes; for simplicity
+                // we mark on any frame skipped past the cap.
+                if (rootElement !== frame.element) truncated = true.also { truncatedReason = "max_depth" }
+                continue
+            }
+            val hierarchy = if (frame.element === rootElement) rootHierarchy
+                else (LanguageHandlerRegistry.getTypeHierarchyHandler(frame.element)
+                    ?.getTypeHierarchy(frame.element, project, BuiltInSearchScope.PROJECT_FILES, false)
+                    ?: PlatformFallbacks.getTypeHierarchy(frame.element, project, BuiltInSearchScope.PROJECT_FILES, false))
+                ?: continue
+
+            val parentIsInterface = frame.typeKind.equals("interface", ignoreCase = true)
+            val edgeKind = if (parentIsInterface) EdgeKind.CLASS_IMPLEMENTS_INTERFACE
+                else EdgeKind.CLASS_INHERITS_FROM
+            if (edgeKind !in kindFilter) continue
+
+            val parentId = CSharpSymbolResolver.typeId(frame.typeName)
+            for (sub in hierarchy.subtypes) {
+                val subName = sub.qualifiedName ?: sub.name
+                if (subName.isBlank()) continue
+                val subId = CSharpSymbolResolver.typeId(subName)
+                if (!visited.add(subName)) {
+                    // Already queued through a different parent. Still
+                    // emit the edge — it carries the inheritance link we'd
+                    // otherwise lose.
+                    addEdge(edges, subId, parentId, edgeKind, emptyMetadata())
+                    continue
+                }
+                if (visited.size > CODE_EDGES_MAX_SUBTYPES) {
+                    truncated = true
+                    truncatedReason = "max_nodes"
+                    visited.remove(subName) // keep visited count accurate
+                    break
+                }
+                addEdge(edges, subId, parentId, edgeKind, emptyMetadata())
+                if (includeTargets) {
+                    nodes.putIfAbsent(subId, typeDataToNode(subId, sub))
+                }
+                // Re-resolve the subtype's PSI element so the next BFS
+                // level can fetch its hierarchy. Done lazily — most leaves
+                // won't be touched again, and resolution can be expensive.
+                if (frame.depth + 1 < maxDepth) {
+                    val subParsed = CSharpSymbolResolver.parse(
+                        "${CSharpSymbolResolver.PREFIX}T:$subName"
+                    )
+                    val subResolved = subParsed?.let { CSharpSymbolResolver.resolve(project, it) }
+                    if (subResolved != null) {
+                        queue.addLast(Frame(subResolved.element, subName, sub.kind, frame.depth + 1))
+                    }
+                }
+            }
+        }
+
+        if (!truncated) return null
+        return com.github.dungphan.unityindex.tools.models.GraphWarning(
+            code = "subtypes_truncated",
+            message = "subtypes BFS truncated: $truncatedReason (visited=${visited.size})",
+            context = buildJsonObject {
+                put("root", JsonPrimitive(rootTypeName))
+                put("visited", JsonPrimitive(visited.size))
+                put("max_depth", JsonPrimitive(maxDepth))
+                put("reason", JsonPrimitive(truncatedReason))
+            },
+        )
+    }
+
+    private fun nodeKindFor(kind: String): NodeKind = when (kind.lowercase()) {
+        "interface" -> NodeKind.INTERFACE
+        "struct" -> NodeKind.STRUCT
+        "enum" -> NodeKind.ENUM
+        else -> NodeKind.CLASS
     }
 
     private fun handleType(

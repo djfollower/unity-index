@@ -5,7 +5,7 @@
   import type { SnapshotResponse } from '@unity-index/graph-core';
   import { pickBridge } from './bridge/pick';
   import { fetchSnapshot, friendlyErrorMessage } from './lib/snapshot';
-  import { anchorIdFor, fetchCodeEdges } from './lib/codeEdges';
+  import { anchorIdFor, fetchCodeEdges, fetchSubtypes } from './lib/codeEdges';
   import { fetchSnapshotDelta } from './lib/delta';
   import { applyDeltaToGraph } from './lib/applyDelta';
   import { buildGraphologyGraph } from './lib/snapshotToGraph';
@@ -28,6 +28,11 @@
   import ContextMenu from './lib/ContextMenu.svelte';
   import FilterSidebar from './lib/FilterSidebar.svelte';
   import SearchBar from './lib/SearchBar.svelte';
+  import DomainToggle from './lib/DomainToggle.svelte';
+  import Legend from './lib/Legend.svelte';
+  import { edgeHiddenByDomain, nodeHiddenByDomain } from './lib/domain';
+  import { computeCrossDomainChain } from './lib/crossDomain';
+  import type { EdgeKind, FilterDomain } from '@unity-index/graph-core';
   import type { ActionId } from './lib/eligibility';
   import {
     findUsages,
@@ -35,8 +40,13 @@
     openFile,
     revealInExplorer,
   } from './lib/actions';
-  import { filterStore } from './lib/filterStore.svelte';
-  import { collectPresentKinds, computeMatches, reconcileHiddenKinds } from './lib/filter';
+  import { filterStore, FilterStore } from './lib/filterStore.svelte';
+  import {
+    collectPresentEdgeKinds,
+    collectPresentKinds,
+    computeMatches,
+    reconcileHiddenKinds,
+  } from './lib/filter';
   import { getFilterState, setFilterState } from './lib/filterSync';
   import Breadcrumb from './lib/Breadcrumb.svelte';
   import type { ImpactClassification } from '@unity-index/graph-core';
@@ -79,9 +89,33 @@
   // anchor only hits the bridge once.
   const codeEdgeInflight = new Set<string>();
 
+  // Day 9.3 — true while a preset fetch is in flight. Surfaces in the
+  // FilterSidebar's preset button so the user can't double-fire.
+  let presetBusy = $state(false);
+
+  /** Anchor id for the MonoBehaviour subclasses preset. UnityEngine ships
+   *  in a referenced assembly, not the project, so we rely on the host's
+   *  workspace-symbol lookup to find it. */
+  const MONOBEHAVIOUR_ID = 'unity://csharp/T:UnityEngine.MonoBehaviour';
+
+  // Day 9.4 — cross-domain chain highlight. Sigma's `enterNode` /
+  // `leaveNode` events drive `hoveredNode`; a 50ms debounce (cheap on
+  // human timescales, plenty for chain recompute) collapses rapid
+  // re-enters into a single computeCrossDomainChain call. The reducer
+  // reads `chainNodesRef` / `chainEdgesRef` per frame.
+  let chainNodesRef: Set<string> = new Set();
+  let chainEdgesRef: Set<string> = new Set();
+  let hoverDebounce: ReturnType<typeof setTimeout> | null = null;
+  /** Accent color for cross-domain chains. Pink/magenta — distinct from
+   *  every per-domain palette colour so the chain reads as "annotation
+   *  layer" rather than "another edge kind". */
+  const CHAIN_ACCENT = '#ff7eb6';
+
   // Day 5: kinds actually present in the current snapshot, with counts.
   // Drives the FilterSidebar rows. Recomputed after every renderSnapshot.
   let presentKinds: Map<string, number> = $state(new Map());
+  // Day 9.2: edge kinds actually present. Drives Legend visibility.
+  let presentEdgeKinds: Set<EdgeKind> = $state(new Set());
 
   // Day 5: persist guards. `hydrated` flips true after the initial host fetch
   // applies any stored state to the store — only then do we start saving
@@ -125,6 +159,7 @@
   // through the reactivity system or every redraw triggers an update cycle.
   // $effect below keeps these in sync and triggers sigma.refresh on change.
   let hiddenKindsRef: Set<string> = new Set();
+  let domainRef: FilterDomain = 'combined';
   let matchedRef: Set<string> = new Set();
   // Union of matched ∪ 1-hop neighbors. Search hides anything outside this
   // set; the union itself is what we draw. Recomputed alongside matches.
@@ -248,6 +283,11 @@
         if (hiddenKindsRef.has(kind)) {
           return { ...attrs, hidden: true };
         }
+        // Day 9 — domain toggle composes with per-kind filter via AND. Both
+        // must allow the kind for the node to render.
+        if (nodeHiddenByDomain(domainRef, kind)) {
+          return { ...attrs, hidden: true };
+        }
         // Search active: hide anything that isn't a match or a 1-hop
         // neighbor of a match. Matches draw bright, neighbors draw faded
         // (so the user can see what the match connects to without losing
@@ -281,6 +321,15 @@
         if (ringColor) {
           next.borderColor = ringColor;
           next.borderSize = 2;
+        }
+        // Day 9.4 — chain accent overrides classification rings; if the
+        // user is hovering a chain we want the chain story to win over
+        // the impact story (they aren't comparable, and chain is the
+        // gesture-driven layer).
+        if (chainNodesRef.has(node)) {
+          next.borderColor = CHAIN_ACCENT;
+          next.borderSize = 3;
+          next.zIndex = 3;
         }
         return next;
       },
@@ -317,6 +366,17 @@
           if ((sKind && hiddenKindsRef.has(sKind)) || (tKind && hiddenKindsRef.has(tKind))) {
             return { ...attrs, hidden: true };
           }
+          // Day 9 — domain toggle hides edges by their own kind AND by
+          // endpoint domain. The endpoint check catches the bridging
+          // `script_declares_class` edge automatically (its target is a
+          // code-kind node, so it disappears in assets-only).
+          if (
+            edgeHiddenByDomain(domainRef, attrs.kind as string) ||
+            (sKind && nodeHiddenByDomain(domainRef, sKind)) ||
+            (tKind && nodeHiddenByDomain(domainRef, tKind))
+          ) {
+            return { ...attrs, hidden: true };
+          }
         }
         // Search active: only draw edges that touch at least one matched
         // node. Edges between two neighbors (neither matched) aren't part
@@ -334,11 +394,29 @@
         }
         const selectionMiss =
           selectedRef !== null && source !== selectedRef && target !== selectedRef;
+        // Day 9.4 — cross-domain chain accent. Two tiers:
+        //  - Hover chain edges paint in CHAIN_ACCENT at 1.6× their styled
+        //    size so the whole prefab→script→class→base highlight reads
+        //    as one connected ribbon.
+        //  - The bridging `script_declares_class` edge gets a softer
+        //    always-on accent (50% alpha) so the asset/code boundary is
+        //    legible even without hover.
+        const inChain = chainEdgesRef.has(edge);
+        const isBridge = attrs.kind === 'script_declares_class';
+        let color = selectionMiss ? fade(style.color, 0.15) : style.color;
+        let size = style.size;
+        if (inChain) {
+          color = CHAIN_ACCENT;
+          size = style.size * 1.6;
+        } else if (isBridge) {
+          color = fade(CHAIN_ACCENT, 0.55);
+        }
         return {
           ...attrs,
-          color: selectionMiss ? fade(style.color, 0.15) : style.color,
-          size: style.size,
+          color,
+          size,
           type: style.type,
+          zIndex: inChain ? 3 : 0,
         };
       },
     });
@@ -353,6 +431,32 @@
     sigma.on('clickStage', () => {
       selectedNode = null;
       selectedRef = null;
+      sigma?.refresh();
+    });
+
+    // Day 9.4 — hover-tracking for the cross-domain chain accent. We
+    // debounce the chain compute on enter (so a fast cursor sweep across
+    // 200 nodes doesn't fire 200 BFSes); leave clears immediately because
+    // a delay there would leave stale highlight ghosts behind the cursor.
+    sigma.on('enterNode', ({ node }) => {
+      if (hoverDebounce) clearTimeout(hoverDebounce);
+      hoverDebounce = setTimeout(() => {
+        hoverDebounce = null;
+        if (!currentGraph) return;
+        const chain = computeCrossDomainChain(currentGraph, node);
+        chainNodesRef = chain.nodes;
+        chainEdgesRef = chain.edges;
+        sigma?.refresh();
+      }, 50);
+    });
+    sigma.on('leaveNode', () => {
+      if (hoverDebounce) {
+        clearTimeout(hoverDebounce);
+        hoverDebounce = null;
+      }
+      if (chainNodesRef.size === 0 && chainEdgesRef.size === 0) return;
+      chainNodesRef = new Set();
+      chainEdgesRef = new Set();
       sigma?.refresh();
     });
 
@@ -430,6 +534,7 @@
       }
     });
     presentKinds = collectPresentKinds(graph);
+    presentEdgeKinds = collectPresentEdgeKinds(graph) as Set<EdgeKind>;
     // Reconcile any previously-stored hidden kinds against what's actually in
     // this snapshot. If a project no longer has, say, `addressable_group`
     // nodes, drop the toggle so the sidebar doesn't show a phantom row.
@@ -606,6 +711,7 @@
         // need to bump matched/related explicitly. Cheapest path: bump the
         // filter store revision so dependent effects re-fire.
         presentKinds = collectPresentKinds(currentGraph);
+        presentEdgeKinds = collectPresentEdgeKinds(currentGraph) as Set<EdgeKind>;
         // Re-kick the worker so newly-added nodes (which start at random
         // [-1, 1]) settle next to their neighbours instead of sitting at
         // the origin. Short burst — most deltas touch a handful of nodes.
@@ -680,6 +786,7 @@
   $effect(() => {
     void filterStore.revision;
     hiddenKindsRef = filterStore.hiddenKinds;
+    domainRef = filterStore.domain;
     matchedRef = filterStore.matched;
     searchActiveRef = filterStore.isSearchActive();
     sigma?.refresh();
@@ -727,6 +834,10 @@
       clearTimeout(saveTimer);
       saveTimer = null;
     }
+    if (hoverDebounce) {
+      clearTimeout(hoverDebounce);
+      hoverDebounce = null;
+    }
   });
 
   // Day 5 Task 7: pull stored filter state from the host, reconcile against
@@ -743,6 +854,8 @@
       const validKinds = reconcileHiddenKinds(stored.hiddenKinds, present);
       filterStore.setHiddenKinds(validKinds);
       filterStore.setSearch(stored.search ?? '');
+      // Day 9 — domain may be missing on a pre-Day-9 host; coerce to default.
+      filterStore.setDomain(FilterStore.coerceDomain(stored.domain));
     } catch (e) {
       console.warn('[unity-index-graph] filter hydrate failed:', e);
     } finally {
@@ -844,6 +957,58 @@
     }
   }
 
+  // Day 9.3 — preset: fetch every transitive MonoBehaviour subclass from
+  // the host and merge into the live graph. Reuses the delta-apply path so
+  // layout / clustering / focus pick the new nodes up automatically.
+  async function showMonoBehaviourSubclasses(): Promise<void> {
+    if (!bridgeRef || bridgeRef.host === 'standalone' || !currentGraph) return;
+    if (presetBusy) return;
+    presetBusy = true;
+    status = 'walking MonoBehaviour subclasses…';
+    try {
+      const res = await fetchSubtypes(bridgeRef.bridge, MONOBEHAVIOUR_ID);
+      const result = applyDeltaToGraph(currentGraph, {
+        base_revision: -1,
+        new_revision: -1,
+        generated_at: res.generated_at,
+        source_phase: 'code',
+        nodes_added: res.snapshot.nodes,
+        nodes_removed: [],
+        nodes_updated: [],
+        edges_added: res.snapshot.edges,
+        edges_removed: [],
+        stats: res.snapshot.stats,
+      });
+      const added = res.snapshot.nodes.length;
+      const edges = res.snapshot.edges.length;
+      const truncated = res.warnings?.some((w) => w.code === 'subtypes_truncated') ?? false;
+      const truncatedNote = truncated ? ' · truncated (raise subtypes_max_depth or shrink the scope)' : '';
+      const droppedNote = result.droppedEdges > 0 ? `, ${result.droppedEdges} dropped` : '';
+      status = `MonoBehaviours: +${added} nodes, +${edges} edges${droppedNote}${truncatedNote}`;
+      presentKinds = collectPresentKinds(currentGraph);
+      presentEdgeKinds = collectPresentEdgeKinds(currentGraph) as Set<EdgeKind>;
+      // Push a focus frame anchored on MonoBehaviour so the camera trims
+      // back to the inheritance subgraph the user just summoned. Direction
+      // 'in' keeps to the upstream tree (subclasses → MonoBehaviour edges
+      // are class_inherits_from with parent as target, so the inbound
+      // closure is exactly the set we want to see).
+      if (currentGraph.hasNode(MONOBEHAVIOUR_ID)) {
+        focusStack = [
+          ...focusStack,
+          { nodeId: MONOBEHAVIOUR_ID, hops: 8, direction: 'in', kind: 'neighbors' },
+        ];
+      }
+      // The host may not actually flag MonoBehaviour as a code-domain
+      // anchor that user already-expanded — track it so the right-click
+      // menu's "Expand code edges" stays consistent.
+      expandedCodeAnchors = new Set([...expandedCodeAnchors, MONOBEHAVIOUR_ID]);
+    } catch (e) {
+      status = `MonoBehaviour preset failed: ${friendlyActionError((e as Error).message)}`;
+    } finally {
+      presetBusy = false;
+    }
+  }
+
   // Day 8.5 — fetch this node's C# semantic edges (inheritance, calls,
   // references) and merge them into the live graph. Idempotent: a node
   // that's already in `expandedCodeAnchors` short-circuits. Layout is left
@@ -893,6 +1058,7 @@
       // Recompute kind palette so any new code kinds (interface, method, …)
       // show up in the filter sidebar without a full snapshot reload.
       presentKinds = collectPresentKinds(currentGraph);
+      presentEdgeKinds = collectPresentEdgeKinds(currentGraph) as Set<EdgeKind>;
     } catch (e) {
       status = `code edges failed: ${friendlyActionError((e as Error).message)}`;
     } finally {
@@ -948,7 +1114,14 @@
   >
     <div class="canvas" bind:this={container}></div>
     {#if viewState === 'ready'}
-      <FilterSidebar {presentKinds} />
+      <FilterSidebar
+        {presentKinds}
+        standalone={bridgeRef?.host === 'standalone'}
+        {presetBusy}
+        onShowMonoBehaviours={() => { void showMonoBehaviourSubclasses(); }}
+      />
+      <DomainToggle />
+      <Legend present={presentEdgeKinds} />
       <SearchBar totalNodes={currentGraph?.order ?? 0} />
       <Breadcrumb
         stack={focusStack}

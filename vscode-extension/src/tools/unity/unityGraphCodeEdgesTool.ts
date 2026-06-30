@@ -11,7 +11,11 @@ import type {
   MethodCallSite,
   NodeKind,
 } from "@unity-index/graph-core";
-import { CODE_EDGES_MAX_SYMBOLS } from "@unity-index/graph-core";
+import {
+  CODE_EDGES_DEFAULT_SUBTYPES_MAX_DEPTH,
+  CODE_EDGES_MAX_SUBTYPES,
+  CODE_EDGES_MAX_SYMBOLS,
+} from "@unity-index/graph-core";
 import { AbstractMcpTool, ToolContext, fromPosition } from "../abstractTool";
 import { TOOL_NAMES } from "../../constants";
 import { ToolCallResult } from "../../models/jsonRpc";
@@ -24,6 +28,7 @@ import {
   executeWorkspaceSymbols,
   prepareCallHierarchy,
   prepareTypeHierarchy,
+  typeHierarchySubtypes,
   typeHierarchySupertypes,
 } from "../../utils/lspBridge";
 
@@ -84,10 +89,10 @@ export class UnityGraphCodeEdgesTool extends AbstractMcpTool {
       "symbol_ids",
       {
         type: "array",
-        description: `1..${CODE_EDGES_MAX_SYMBOLS} unity://csharp/<DocId> IDs (e.g. 'unity://csharp/T:Foo.Bar', 'unity://csharp/M:Foo.Bar.Baz(System.Int32)').`,
+        description: `1..${CODE_EDGES_MAX_SYMBOLS} unity://csharp/<DocId> IDs (e.g. 'unity://csharp/T:Foo.Bar', 'unity://csharp/M:Foo.Bar.Baz(System.Int32)'). Optional when subtypes_of is set.`,
         items: { type: "string" },
       },
-      true,
+      false,
     )
     .property("edge_kinds", {
       type: "array",
@@ -100,6 +105,14 @@ export class UnityGraphCodeEdgesTool extends AbstractMcpTool {
       "include_targets",
       "Default true. When false, snapshot.nodes is empty (caller has them).",
     )
+    .stringProperty(
+      "subtypes_of",
+      `Optional unity://csharp/T:Ns.Type root. When set, walks the type-hierarchy provider's subtypes transitively and emits inheritance edges from each subclass back to its immediate parent. Capped at ${CODE_EDGES_MAX_SUBTYPES} nodes; truncation surfaces as a subtypes_truncated warning.`,
+    )
+    .property("subtypes_max_depth", {
+      type: "integer",
+      description: `Depth cap for the subtypes_of BFS. Default ${CODE_EDGES_DEFAULT_SUBTYPES_MAX_DEPTH}, clamped to 16.`,
+    })
     .stringProperty(
       "request_id",
       "Optional; echoed back on the response for client correlation.",
@@ -137,13 +150,14 @@ export async function harvestCodeEdges(
     const e = validation.error;
     throw new Error(`${e.kind}: ${e.detail}`);
   }
-  const ids = request.symbol_ids;
+  const ids = request.symbol_ids ?? [];
   const includeTargets = request.include_targets !== false;
   const kindFilter = new Set<CodeEdgeKind>(
     request.edge_kinds && request.edge_kinds.length > 0
       ? request.edge_kinds
       : ALL_KINDS,
   );
+  const subtypesMaxDepth = clampSubtypesDepth(request.subtypes_max_depth);
 
   const unresolvedIds: string[] = [];
   const edges = new Map<string, GraphEdge>();
@@ -170,6 +184,26 @@ export async function harvestCodeEdges(
     }
   }
 
+  let truncationWarning: { code: string; message: string; context?: Record<string, unknown> } | undefined;
+  if (request.subtypes_of) {
+    const resolvedRoot = await resolveSymbol(request.subtypes_of, rootPath);
+    if (!resolvedRoot) {
+      unresolvedIds.push(request.subtypes_of);
+    } else if (
+      kindFilter.has("class_inherits_from") ||
+      kindFilter.has("class_implements_interface")
+    ) {
+      truncationWarning = await collectTransitiveSubtypes(
+        resolvedRoot,
+        subtypesMaxDepth,
+        kindFilter,
+        edges,
+        targetNodes,
+        includeTargets,
+      );
+    }
+  }
+
   const snapshot: GraphSnapshot = {
     nodes: includeTargets ? Array.from(targetNodes.values()) : [],
     edges: Array.from(edges.values()),
@@ -188,16 +222,118 @@ export async function harvestCodeEdges(
   };
   if (unresolvedIds.length > 0) response.unresolved_ids = unresolvedIds;
   if (request.request_id !== undefined) response.request_id = request.request_id;
+  if (truncationWarning) response.warnings = [truncationWarning];
   return response;
+}
+
+/** Day 9.3 — BFS the LSP's TypeHierarchyItem subtypes from a resolved root.
+ *  Mirrors the Kotlin `collectSubtypes`: emits inheritance edges from each
+ *  subclass back to its *immediate* parent (preserving the tree shape),
+ *  caps visited nodes at CODE_EDGES_MAX_SUBTYPES and depth at
+ *  `maxDepth`, and returns a `subtypes_truncated` warning when either cap
+ *  fires. The kind on each child→parent edge is decided by the parent's
+ *  symbol kind: class_implements_interface when the parent is an
+ *  interface, class_inherits_from otherwise. */
+async function collectTransitiveSubtypes(
+  rootResolved: ResolvedSymbol,
+  maxDepth: number,
+  kindFilter: Set<CodeEdgeKind>,
+  edges: Map<string, GraphEdge>,
+  targetNodes: Map<string, GraphNode>,
+  includeTargets: boolean,
+): Promise<{ code: string; message: string; context?: Record<string, unknown> } | undefined> {
+  const roots = await prepareTypeHierarchy(rootResolved.uri, rootResolved.position);
+  if (roots.length === 0) return undefined;
+  const rootItem = roots[0];
+  const rootId = rootResolved.inputId; // already a unity://csharp/T: id
+  if (includeTargets) {
+    addTargetNode(targetNodes, rootId, {
+      name: rootItem.name,
+      kind: rootItem.kind,
+      uri: rootItem.uri,
+      detail: rootItem.detail ?? "",
+    });
+  }
+
+  // Queue carries the parent TypeHierarchyItem + its minted id + depth.
+  type Frame = { parent: vscode.TypeHierarchyItem; parentId: string; depth: number };
+  const queue: Frame[] = [{ parent: rootItem, parentId: rootId, depth: 0 }];
+  const visited = new Set<string>([rootId]);
+  let truncated = false;
+  let truncatedReason = "";
+
+  while (queue.length > 0 && !truncated) {
+    const frame = queue.shift()!;
+    if (frame.depth >= maxDepth) {
+      if (frame.parent !== rootItem) {
+        truncated = true;
+        truncatedReason = "max_depth";
+      }
+      continue;
+    }
+    let subs: vscode.TypeHierarchyItem[];
+    try {
+      subs = await typeHierarchySubtypes(frame.parent);
+    } catch {
+      continue;
+    }
+    const parentIsInterface = frame.parent.kind === vscode.SymbolKind.Interface;
+    const edgeKind: CodeEdgeKind = parentIsInterface
+      ? "class_implements_interface"
+      : "class_inherits_from";
+    if (!kindFilter.has(edgeKind)) continue;
+    for (const sub of subs) {
+      const subId = mintCsharpId(sub, "T");
+      if (!visited.has(subId)) {
+        if (visited.size >= CODE_EDGES_MAX_SUBTYPES) {
+          truncated = true;
+          truncatedReason = "max_nodes";
+          break;
+        }
+        visited.add(subId);
+        if (includeTargets) {
+          addTargetNode(targetNodes, subId, {
+            name: sub.name,
+            kind: sub.kind,
+            uri: sub.uri,
+            detail: sub.detail ?? "",
+          });
+        }
+        if (frame.depth + 1 < maxDepth) {
+          queue.push({ parent: sub, parentId: subId, depth: frame.depth + 1 });
+        }
+      }
+      addEdge(edges, subId, frame.parentId, edgeKind, {});
+    }
+  }
+
+  if (!truncated) return undefined;
+  return {
+    code: "subtypes_truncated",
+    message: `subtypes BFS truncated: ${truncatedReason} (visited=${visited.size})`,
+    context: {
+      root: rootResolved.fqn,
+      visited: visited.size,
+      max_depth: maxDepth,
+      reason: truncatedReason,
+    },
+  };
 }
 
 function validateCodeEdgesRequest(
   request: CodeEdgesRequest,
 ): { error: { kind: "invalid_id"; detail: string } } | undefined {
   const ids = Array.isArray(request.symbol_ids) ? request.symbol_ids : [];
-  if (ids.length === 0) {
+  const subtypesOf =
+    typeof request.subtypes_of === "string" && request.subtypes_of.length > 0
+      ? request.subtypes_of
+      : undefined;
+  if (ids.length === 0 && !subtypesOf) {
     return {
-      error: { kind: "invalid_id", detail: "symbol_ids must contain at least one entry" },
+      error: {
+        kind: "invalid_id",
+        detail: "symbol_ids must contain at least one entry (or set subtypes_of)",
+      },
     };
   }
   if (ids.length > CODE_EDGES_MAX_SYMBOLS) {
@@ -218,7 +354,33 @@ function validateCodeEdgesRequest(
       };
     }
   }
+  if (subtypesOf !== undefined) {
+    if (!subtypesOf.startsWith(CSHARP_PREFIX)) {
+      return {
+        error: {
+          kind: "invalid_id",
+          detail: `subtypes_of '${subtypesOf}' is not a 'unity://csharp/...' ID`,
+        },
+      };
+    }
+    const parsed = parseDocId(subtypesOf);
+    if (!parsed || parsed.docKind !== "T") {
+      return {
+        error: {
+          kind: "invalid_id",
+          detail: `subtypes_of must be a type id (T:...), got '${subtypesOf}'`,
+        },
+      };
+    }
+  }
   return undefined;
+}
+
+const MAX_SUBTYPES_DEPTH_CLAMP = 16;
+
+function clampSubtypesDepth(raw: number | undefined): number {
+  const v = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : CODE_EDGES_DEFAULT_SUBTYPES_MAX_DEPTH;
+  return Math.min(MAX_SUBTYPES_DEPTH_CLAMP, Math.max(1, v));
 }
 
 /** Strip the `unity://csharp/` prefix and split into DocId kind + body. */

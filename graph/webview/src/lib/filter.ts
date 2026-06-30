@@ -48,3 +48,16 @@ export function collectPresentKinds(graph: Graph): Map<string, number> {
   });
   return counts;
 }
+
+/** Day 9.2 — set of edge kinds currently in the graph. Drives the Legend's
+ *  "only show rows for what's actually there" behaviour so a pure-asset
+ *  project doesn't carry a dead code-edge legend. Cheap: one pass over
+ *  edges, no allocation per edge beyond the Set itself. */
+export function collectPresentEdgeKinds(graph: Graph): Set<string> {
+  const kinds = new Set<string>();
+  graph.forEachEdge((_id, attrs) => {
+    const kind = typeof attrs.kind === 'string' ? attrs.kind : undefined;
+    if (kind) kinds.add(kind);
+  });
+  return kinds;
+}

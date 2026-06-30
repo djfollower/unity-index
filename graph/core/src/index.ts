@@ -18,6 +18,7 @@ export type {
   FindUsagesResponse,
   RevealInExplorerRequest,
   RevealInExplorerResponse,
+  FilterDomain,
   FilterState,
   GetFilterStateRequest,
   GetFilterStateResponse,
@@ -46,7 +47,11 @@ export type {
   MethodCallKind,
   MethodCallSite,
 } from './code-edges-wire.js';
-export { CODE_EDGES_MAX_SYMBOLS } from './code-edges-wire.js';
+export {
+  CODE_EDGES_DEFAULT_SUBTYPES_MAX_DEPTH,
+  CODE_EDGES_MAX_SUBTYPES,
+  CODE_EDGES_MAX_SYMBOLS,
+} from './code-edges-wire.js';
 
 export type {
   MaterializeOptions,
@@ -114,6 +119,7 @@ export {
   WARNING_UNRESOLVED_TARGETS,
   WARNING_ID_UNRESOLVED,
   WARNING_NEIGHBORS_TRUNCATED,
+  WARNING_SUBTYPES_TRUNCATED,
 } from './snapshot-wire.js';
 
 export type {

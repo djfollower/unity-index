@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CODE_EDGES_DEFAULT_SUBTYPES_MAX_DEPTH,
+  CODE_EDGES_MAX_SUBTYPES,
   CODE_EDGES_MAX_SYMBOLS,
   type CodeEdgeKind,
   type CodeEdgesRequest,
@@ -27,6 +29,34 @@ describe('CODE_EDGES_GRAPH_TYPE', () => {
 describe('CODE_EDGES_MAX_SYMBOLS', () => {
   it('matches the documented cap (graph-mcp-tools.md §3.6 "1..500")', () => {
     expect(CODE_EDGES_MAX_SYMBOLS).toBe(500);
+  });
+});
+
+describe('CODE_EDGES_MAX_SUBTYPES + default depth', () => {
+  it('exposes the Day 9.3 preset caps', () => {
+    expect(CODE_EDGES_MAX_SUBTYPES).toBe(2000);
+    expect(CODE_EDGES_DEFAULT_SUBTYPES_MAX_DEPTH).toBe(8);
+  });
+});
+
+describe('CodeEdgesRequest.subtypes_of (Day 9.3)', () => {
+  it('accepts a request with subtypes_of and no symbol_ids', () => {
+    const req: CodeEdgesRequest = {
+      project_path: '/tmp/proj',
+      subtypes_of: 'unity://csharp/T:UnityEngine.MonoBehaviour',
+    };
+    expect(req.subtypes_of).toContain('MonoBehaviour');
+    expect(req.symbol_ids).toBeUndefined();
+  });
+
+  it('accepts a request mixing subtypes_of with seed symbols and a depth cap', () => {
+    const req: CodeEdgesRequest = {
+      project_path: '/tmp/proj',
+      symbol_ids: ['unity://csharp/T:Foo.Bar'],
+      subtypes_of: 'unity://csharp/T:UnityEngine.MonoBehaviour',
+      subtypes_max_depth: 4,
+    };
+    expect(req.subtypes_max_depth).toBe(4);
   });
 });
 

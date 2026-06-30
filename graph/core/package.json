@@ -1,6 +1,6 @@
 {
   "name": "@unity-index/graph-core",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "private": true,
   "description": "Shared TS core for unity-index-graph: host-bridge contract, message types, graph model.",
   "type": "module",

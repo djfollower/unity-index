@@ -88,6 +88,17 @@
     font-size: 12px;
     z-index: 5;
   }
+  /* Day 9 — narrow mode: slot below the DomainToggle banner. Toggle is
+     ~34px tall (padding 2 + button padding 3 + 11.5px font + line). 10px
+     for top margin + 34 for toggle + 6px gap → top: 50px. */
+  @media (max-width: 760px) {
+    .searchbar {
+      top: 50px;
+      left: 10px;
+      right: 10px;
+      width: auto;
+    }
+  }
   .searchbar.active {
     border-color: #4f7cff;
   }

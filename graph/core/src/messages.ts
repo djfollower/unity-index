@@ -144,14 +144,25 @@ export interface RevealInExplorerResponse {
 //
 // `search` is a free-text fuzzy query. Persisted so reopening the panel
 // restores the last view. Empty string = no active search.
+//
+// Day 9 — `domain` adds a three-way assets/code/combined toggle. It composes
+// with `hiddenKinds` (both must allow a kind for a node to render); the
+// toggle is the bulk macro, the per-kind checkboxes are the fine grain.
+// Persisted on the wire as a string so older hosts that round-trip the field
+// untouched still work; the webview coerces unknown values to "combined".
 // ---------------------------------------------------------------------------
 
 export const GET_FILTER_STATE_TYPE = 'unity_graph_get_filter_state' as const;
 export const SET_FILTER_STATE_TYPE = 'unity_graph_set_filter_state' as const;
 
+export type FilterDomain = 'assets' | 'code' | 'combined';
+
 export interface FilterState {
   hiddenKinds: string[];
   search: string;
+  /** Day 9 — domain toggle. Older hosts may omit; webview defaults to
+   *  'combined' when missing or unrecognised. */
+  domain?: FilterDomain;
 }
 
 export interface GetFilterStateRequest {}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import Graph from 'graphology';
 import {
+  collectPresentEdgeKinds,
   collectPresentKinds,
   computeMatches,
   reconcileHiddenKinds,
@@ -92,5 +93,29 @@ describe('collectPresentKinds', () => {
     g.addNode('a', { label: 'x' });
     const counts = collectPresentKinds(g);
     expect(counts.get('unknown')).toBe(1);
+  });
+});
+
+describe('collectPresentEdgeKinds', () => {
+  it('collects every edge kind seen', () => {
+    const g = new Graph({ type: 'directed', multi: true });
+    g.addNode('a');
+    g.addNode('b');
+    g.addNode('c');
+    g.addEdgeWithKey('e1', 'a', 'b', { kind: 'class_inherits_from' });
+    g.addEdgeWithKey('e2', 'b', 'c', { kind: 'method_calls_method' });
+    g.addEdgeWithKey('e3', 'a', 'c', { kind: 'method_calls_method' });
+    const kinds = collectPresentEdgeKinds(g);
+    expect(kinds.has('class_inherits_from')).toBe(true);
+    expect(kinds.has('method_calls_method')).toBe(true);
+    expect(kinds.size).toBe(2);
+  });
+
+  it('skips edges with a non-string kind attr', () => {
+    const g = new Graph({ type: 'directed', multi: true });
+    g.addNode('a');
+    g.addNode('b');
+    g.addEdgeWithKey('e1', 'a', 'b', {});
+    expect(collectPresentEdgeKinds(g).size).toBe(0);
   });
 });

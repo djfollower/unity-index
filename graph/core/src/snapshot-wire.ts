@@ -83,3 +83,8 @@ export const WARNING_DANGLING_CSHARP_TARGETS = 'dangling_csharp_targets';
 export const WARNING_UNRESOLVED_TARGETS = 'unresolved_targets';
 export const WARNING_ID_UNRESOLVED = 'id_unresolved';
 export const WARNING_NEIGHBORS_TRUNCATED = 'neighbors_truncated';
+/** Day 9.3 — emitted by `unity_graph_code_edges` when a `subtypes_of`
+ *  preset walk hits the `CODE_EDGES_MAX_SUBTYPES` cap or the depth limit
+ *  before exhausting the hierarchy. The response still contains everything
+ *  that fit; the warning's `context` carries `{ root, visited, depth }`. */
+export const WARNING_SUBTYPES_TRUNCATED = 'subtypes_truncated';

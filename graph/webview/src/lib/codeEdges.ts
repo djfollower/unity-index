@@ -43,6 +43,32 @@ export async function fetchCodeEdges(
   );
 }
 
+/** Day 9.3 — preset fetch: every transitive subclass of `rootSymbolId`.
+ *  The host walks the type-hierarchy provider and returns
+ *  `class_inherits_from` (or `class_implements_interface`) edges from each
+ *  subclass back to its immediate parent. We bump the timeout because the
+ *  walk can resolve thousands of types on a cold Roslyn cache; the 60s
+ *  ceiling matches the worst case observed against the AnimalDungeon
+ *  sample referenced in the plan. */
+const SUBTYPES_TIMEOUT_MS = 60_000;
+
+export async function fetchSubtypes(
+  bridge: HostBridge,
+  rootSymbolId: string,
+): Promise<CodeEdgesResponse> {
+  const req: CodeEdgesRequest = {
+    project_path: '',
+    subtypes_of: rootSymbolId,
+    include_targets: true,
+  };
+  return request<CodeEdgesRequest, CodeEdgesResponse>(
+    bridge,
+    CODE_EDGES_GRAPH_TYPE,
+    req,
+    { timeoutMs: SUBTYPES_TIMEOUT_MS },
+  );
+}
+
 /** Resolve the `unity://csharp/T:...` anchor id for `nodeId`. Returns
  *  undefined when the node isn't a code-domain anchor and the menu action
  *  should be hidden. We don't read `metadata` off the graphology node

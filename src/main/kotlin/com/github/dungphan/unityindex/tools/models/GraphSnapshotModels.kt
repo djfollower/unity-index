@@ -195,12 +195,20 @@ data class GraphSnapshotDeltaRequest(
 data class CodeEdgesRequest(
     val project_path: String? = null,
     val request_id: String? = null,
-    /** 1..500 `unity://csharp/...` IDs. */
+    /** 1..500 `unity://csharp/...` IDs. Optional when [subtypes_of] is set. */
     val symbol_ids: List<String> = emptyList(),
     /** Filter — only return edges of these kinds. Omit/empty for all. */
     val edge_kinds: List<EdgeKind>? = null,
     /** When false, the response contains edges only. Default: true. */
     val include_targets: Boolean? = null,
+    /** Day 9.3 — transitive subtypes preset. When set, the host BFSes the
+     *  type-hierarchy provider's subtypes from this `unity://csharp/T:...`
+     *  root and emits the resulting `class_inherits_from` /
+     *  `class_implements_interface` edges. See
+     *  graph/core/src/code-edges-wire.ts for the full contract. */
+    val subtypes_of: String? = null,
+    /** Day 9.3 — depth cap for [subtypes_of]. Defaults to 8. */
+    val subtypes_max_depth: Int? = null,
 )
 
 @Serializable

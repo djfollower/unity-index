@@ -197,7 +197,15 @@ object GraphHostHandlers {
     private data class FilterStateWire(
         val hiddenKinds: List<String> = emptyList(),
         val search: String = "",
+        // Day 9 — assets|code|combined. Unknown values fall back to
+        // "combined" so a webview sending a future value can't wedge state.
+        val domain: String = "combined",
     )
+
+    private fun coerceDomain(raw: String): String = when (raw) {
+        "assets", "code", "combined" -> raw
+        else -> "combined"
+    }
 
     @Serializable
     private data class SetFilterStateWire(val state: FilterStateWire = FilterStateWire())
@@ -211,6 +219,7 @@ object GraphHostHandlers {
                 kotlinx.serialization.json.JsonArray(current.hiddenKinds.map { JsonPrimitive(it) }),
             )
             put("search", JsonPrimitive(current.search))
+            put("domain", JsonPrimitive(coerceDomain(current.domain)))
         }
         return buildJsonObject { put("state", state) }
     }
@@ -226,7 +235,11 @@ object GraphHostHandlers {
         } catch (e: Exception) {
             throw IllegalArgumentException("invalid_filter_state: ${e.message}")
         }
-        GraphFilterStateService.get(project).write(req.state.hiddenKinds, req.state.search)
+        GraphFilterStateService.get(project).write(
+            req.state.hiddenKinds,
+            req.state.search,
+            coerceDomain(req.state.domain),
+        )
         return buildJsonObject { put("saved", JsonPrimitive(true)) }
     }
 
