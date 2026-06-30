@@ -57,6 +57,7 @@ export const TOOL_NAMES = {
   UNITY_GRAPH_IMPACT: "unity_graph_impact",
   UNITY_GRAPH_CONTEXT: "unity_graph_context",
   UNITY_GRAPH_CODE_EDGES: "unity_graph_code_edges",
+  UNITY_GRAPH_DIAGNOSTICS: "unity_graph_diagnostics",
 } as const;
 
 export const PARAM_NAMES = {

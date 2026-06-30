@@ -38,7 +38,22 @@ export {
   IMPACT_GRAPH_TYPE,
   CONTEXT_GRAPH_TYPE,
   CODE_EDGES_GRAPH_TYPE,
+  DIAGNOSTICS_GRAPH_TYPE,
 } from './messages.js';
+
+export type {
+  DiagnosticMessage,
+  DiagnosticSeverity,
+  DiagnosticsBatchRequest,
+  DiagnosticsBatchResponse,
+  MaxDiagnosticSeverity,
+  NodeDiagnostics,
+} from './diagnostics-wire.js';
+export {
+  DIAGNOSTICS_DEFAULT_MAX_MESSAGES,
+  DIAGNOSTICS_MAX_MESSAGES_PER_NODE,
+  DIAGNOSTICS_MAX_NODES,
+} from './diagnostics-wire.js';
 
 export type {
   CodeEdgeKind,

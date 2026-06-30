@@ -2,8 +2,11 @@ package com.github.dungphan.unityindex.graph
 
 import com.github.dungphan.unityindex.tools.models.CodeEdgesRequest
 import com.github.dungphan.unityindex.tools.models.CodeEdgesResponse
+import com.github.dungphan.unityindex.tools.models.DiagnosticsBatchRequest
+import com.github.dungphan.unityindex.tools.models.DiagnosticsBatchResponse
 import com.github.dungphan.unityindex.tools.models.GraphSnapshotRequest
 import com.github.dungphan.unityindex.tools.unity.UnityGraphCodeEdgesTool
+import com.github.dungphan.unityindex.tools.unity.UnityGraphDiagnosticsTool
 import com.github.dungphan.unityindex.util.GraphClassAnchors
 import com.github.dungphan.unityindex.util.UnityAssetGraphBuilder
 import com.intellij.ide.actions.RevealFileAction
@@ -49,6 +52,7 @@ object GraphHostHandlers {
             GraphWireTypes.GET_FILTER_STATE -> handleGetFilterState(project)
             GraphWireTypes.SET_FILTER_STATE -> handleSetFilterState(payload, project)
             GraphWireTypes.CODE_EDGES -> handleCodeEdges(payload, project)
+            GraphWireTypes.DIAGNOSTICS -> handleDiagnostics(payload, project)
             else -> throw IllegalArgumentException("unity_graph: unknown request type '$type'")
         }
     }
@@ -78,6 +82,21 @@ object GraphHostHandlers {
         )
         val response = UnityGraphCodeEdgesTool.runDirect(project, request)
         return json.encodeToJsonElement(CodeEdgesResponse.serializer(), response)
+    }
+
+    /** Day 10 — diagnostics overlay refresh from the webview. Routes
+     *  through the same in-process harvester the MCP tool uses (no HTTP
+     *  hop) so badges / heatmap / errors-only filter share the same
+     *  source. */
+    private fun handleDiagnostics(payload: JsonElement?, project: Project?): JsonElement {
+        project ?: throw IllegalStateException("no_project_open")
+        val request = decodeOrThrow(
+            payload,
+            DiagnosticsBatchRequest.serializer(),
+            "invalid_diagnostics_request",
+        )
+        val response = UnityGraphDiagnosticsTool.runDirect(project, request)
+        return json.encodeToJsonElement(DiagnosticsBatchResponse.serializer(), response)
     }
 
     private fun handleSnapshot(payload: JsonElement?, project: Project?): JsonElement {

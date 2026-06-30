@@ -45,4 +45,10 @@ object GraphWireTypes {
     // .ts CODE_EDGES_GRAPH_TYPE; also matches ToolNames.UNITY_GRAPH_CODE_EDGES
     // so the same identifier flows through both the bridge and HTTP paths.
     const val CODE_EDGES = "unity_graph_code_edges"
+
+    // Day 10 — batched diagnostics overlay (badges + heatmap + errors-only
+    // filter). Mirror of graph/core/src/messages.ts DIAGNOSTICS_GRAPH_TYPE;
+    // also matches ToolNames.UNITY_GRAPH_DIAGNOSTICS so the same identifier
+    // flows through both the bridge and HTTP paths.
+    const val DIAGNOSTICS = "unity_graph_diagnostics"
 }

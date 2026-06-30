@@ -220,6 +220,64 @@ data class CodeEdgesResponse(
     val unresolved_ids: List<String>? = null,
 )
 
+// ---------------------------------------------------------------------------
+// Day 10 — unity_graph_diagnostics. Mirrors graph/core/src/diagnostics-wire.ts;
+// see that file for the canonical contract documentation. Both
+// implementations MUST emit the same field names so a single MCP client
+// config works against either host.
+// ---------------------------------------------------------------------------
+
+@Serializable
+enum class DiagnosticSeverity {
+    @SerialName("error") ERROR,
+    @SerialName("warning") WARNING,
+    @SerialName("info") INFO,
+}
+
+@Serializable
+enum class MaxDiagnosticSeverity {
+    @SerialName("error") ERROR,
+    @SerialName("warning") WARNING,
+    @SerialName("info") INFO,
+    @SerialName("none") NONE,
+}
+
+@Serializable
+data class DiagnosticMessage(
+    val severity: DiagnosticSeverity,
+    val message: String,
+    val line: Int? = null,
+    val column: Int? = null,
+)
+
+@Serializable
+data class NodeDiagnostics(
+    val node_id: String,
+    val errors: Int,
+    val warnings: Int,
+    val infos: Int,
+    val max_severity: MaxDiagnosticSeverity,
+    val top_messages: List<DiagnosticMessage>? = null,
+)
+
+@Serializable
+data class DiagnosticsBatchRequest(
+    val project_path: String? = null,
+    val request_id: String? = null,
+    val node_ids: List<String> = emptyList(),
+    val include_messages: Boolean? = null,
+    val max_messages_per_node: Int? = null,
+)
+
+@Serializable
+data class DiagnosticsBatchResponse(
+    val request_id: String? = null,
+    val generated_at: String,
+    val warnings: List<GraphWarning>? = null,
+    val diagnostics: List<NodeDiagnostics>,
+    val unresolved_ids: List<String>? = null,
+)
+
 @Serializable
 data class GraphSnapshotDeltaResponse(
     val request_id: String? = null,

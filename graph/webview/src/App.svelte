@@ -42,6 +42,13 @@
   } from './lib/actions';
   import { filterStore, FilterStore } from './lib/filterStore.svelte';
   import {
+    collectDiagnosticsTargets,
+    diagnosticsStore,
+    heatmapColorFor,
+    heatmapSizeBoostFor,
+  } from './lib/diagnostics.svelte';
+  import type { NodeDiagnostics } from '@unity-index/graph-core';
+  import {
     collectPresentEdgeKinds,
     collectPresentKinds,
     computeMatches,
@@ -159,6 +166,13 @@
   // through the reactivity system or every redraw triggers an update cycle.
   // $effect below keeps these in sync and triggers sigma.refresh on change.
   let hiddenKindsRef: Set<string> = new Set();
+  // Day 10 — reducer refs for the diagnostics overlay. Pulled out of the
+  // reactive store into plain locals so the per-frame nodeReducer doesn't
+  // trigger Svelte's dependency tracking on every paint.
+  let diagBadgesRef: Map<string, NodeDiagnostics> = new Map();
+  let diagResolvedRef: Set<string> = new Set();
+  let diagHeatmapRef = false;
+  let diagErrorsOnlyRef = false;
   let domainRef: FilterDomain = 'combined';
   let matchedRef: Set<string> = new Set();
   // Union of matched ∪ 1-hop neighbors. Search hides anything outside this
@@ -288,6 +302,15 @@
         if (nodeHiddenByDomain(domainRef, kind)) {
           return { ...attrs, hidden: true };
         }
+        // Day 10 — "errors only" gate. We only hide nodes the host has
+        // confirmed clean (errors === 0). Nodes we haven't asked about
+        // yet (or that failed to resolve to a file) pass through — better
+        // to show a possibly-clean node than to silently drop something
+        // we don't know about.
+        if (diagErrorsOnlyRef) {
+          const d = diagBadgesRef.get(node);
+          if (d && d.errors === 0) return { ...attrs, hidden: true };
+        }
         // Search active: hide anything that isn't a match or a 1-hop
         // neighbor of a match. Matches draw bright, neighbors draw faded
         // (so the user can see what the match connects to without losing
@@ -321,6 +344,34 @@
         if (ringColor) {
           next.borderColor = ringColor;
           next.borderSize = 2;
+        }
+        // Day 10 — diagnostic badges + heatmap. Badges always render a
+        // border ring on dirty nodes (red for errors, amber for
+        // warnings); heatmap additionally recolors the body and scales
+        // by reference count so hub files pop. Both layers are subordinate
+        // to the chain accent below (gesture-driven, must win).
+        const diag = diagBadgesRef.get(node);
+        if (diag && diag.max_severity !== 'none') {
+          const badgeColor =
+            diag.max_severity === 'error'
+              ? '#ff5555'
+              : diag.max_severity === 'warning'
+                ? '#ffaa33'
+                : '#5fb3ff';
+          next.borderColor = badgeColor;
+          next.borderSize = Math.max(2, (next.borderSize as number | undefined) ?? 0);
+        }
+        if (diagHeatmapRef && diag) {
+          const heatColor = heatmapColorFor(diag);
+          if (heatColor) {
+            next.color = dimmed ? fade(heatColor, dimAlpha) : heatColor;
+          }
+          // Reference count proxy: graphology degree. Cheap and matches
+          // what the user perceives as "this thing is used a lot".
+          const g = sigma?.getGraph();
+          const refCount = g ? g.degree(node) : 0;
+          const boost = heatmapSizeBoostFor(refCount);
+          next.size = (next.size as number) + boost;
         }
         // Day 9.4 — chain accent overrides classification rings; if the
         // user is hovering a chain we want the chain story to win over
@@ -790,6 +841,35 @@
     matchedRef = filterStore.matched;
     searchActiveRef = filterStore.isSearchActive();
     sigma?.refresh();
+  });
+
+  // Day 10 — diagnostics store mirror. Same shape as the filter effect: pull
+  // into plain locals so the per-frame nodeReducer doesn't bounce off Svelte
+  // tracking, and force-refresh sigma when any of the three modes flip.
+  $effect(() => {
+    void diagnosticsStore.revision;
+    diagBadgesRef = diagnosticsStore.byNode;
+    diagResolvedRef = diagnosticsStore.resolved;
+    diagHeatmapRef = diagnosticsStore.heatmap;
+    diagErrorsOnlyRef = diagnosticsStore.errorsOnly;
+    sigma?.refresh();
+  });
+
+  // Day 10 — auto-refresh diagnostics when the overlay is enabled and the
+  // underlying graph changes (full snapshot OR delta). We don't poll on a
+  // timer: the host pushes new diagnostics into its cache as builds /
+  // analyses complete, and the user can hit the Legend's "refresh" button
+  // for an on-demand pull.
+  $effect(() => {
+    void diagnosticsStore.revision; // re-fire when enabled flips
+    if (!diagnosticsStore.enabled) {
+      diagnosticsStore.reset();
+      return;
+    }
+    if (!bridgeRef || bridgeRef.host === 'standalone') return;
+    if (!currentGraph) return;
+    const targets = collectDiagnosticsTargets(currentGraph);
+    void diagnosticsStore.refresh(bridgeRef.bridge, targets);
   });
 
   // Recompute matches whenever the search query OR the underlying graph

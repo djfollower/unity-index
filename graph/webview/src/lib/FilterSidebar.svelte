@@ -8,6 +8,7 @@
   // keeps the wiring side of Day 5 (Task 7 — load/save round-trip) trivial.
 
   import { filterStore } from './filterStore.svelte';
+  import { diagnosticsStore } from './diagnostics.svelte';
   import { nodeStyleFor } from './style';
   import Presets from './Presets.svelte';
 
@@ -87,6 +88,46 @@
         </div>
       </header>
       <Presets {standalone} busy={presetBusy} {onShowMonoBehaviours} />
+      <!-- Day 10 — diagnostics overlay controls. Mutually-coupled toggles:
+           the umbrella "enabled" switch lights up badges and unlocks the
+           two dependent modes; turning heatmap/errors-only on auto-enables
+           the umbrella so the user doesn't have to flip two switches to
+           see anything. -->
+      <section class="diagnostics" aria-label="Diagnostics overlay">
+        <span class="section-title">Diagnostics</span>
+        <label class="diag-row">
+          <input
+            type="checkbox"
+            checked={diagnosticsStore.enabled}
+            onchange={(e) => diagnosticsStore.setEnabled((e.currentTarget as HTMLInputElement).checked)}
+            disabled={standalone}
+          />
+          <span>Show badges</span>
+        </label>
+        <label class="diag-row" class:disabled={!diagnosticsStore.enabled}>
+          <input
+            type="checkbox"
+            checked={diagnosticsStore.heatmap}
+            onchange={(e) => diagnosticsStore.setHeatmap((e.currentTarget as HTMLInputElement).checked)}
+            disabled={standalone}
+          />
+          <span>Heatmap</span>
+        </label>
+        <label class="diag-row" class:disabled={!diagnosticsStore.enabled}>
+          <input
+            type="checkbox"
+            checked={diagnosticsStore.errorsOnly}
+            onchange={(e) => diagnosticsStore.setErrorsOnly((e.currentTarget as HTMLInputElement).checked)}
+            disabled={standalone}
+          />
+          <span>Errors only</span>
+        </label>
+        {#if diagnosticsStore.lastError}
+          <div class="diag-error" title={diagnosticsStore.lastError}>
+            ⚠ {diagnosticsStore.lastError}
+          </div>
+        {/if}
+      </section>
       <ul>
         {#each rows as row (row.kind)}
           <li>
@@ -249,5 +290,41 @@
     color: #888;
     font-variant-numeric: tabular-nums;
     font-size: 11px;
+  }
+  /* Day 10 — diagnostics overlay section. Sits between presets and the
+     per-kind list so users find it next to the other view controls. */
+  .diagnostics {
+    border-top: 1px solid #333;
+    border-bottom: 1px solid #333;
+    padding: 6px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .section-title {
+    font-size: 10px;
+    color: #888;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+  .diag-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .diag-row.disabled {
+    opacity: 0.45;
+  }
+  .diag-error {
+    color: #ff8888;
+    font-size: 10.5px;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>

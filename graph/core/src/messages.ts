@@ -68,6 +68,17 @@ export const CONTEXT_GRAPH_TYPE = 'unity_graph_context' as const;
 export const CODE_EDGES_GRAPH_TYPE = 'unity_graph_code_edges' as const;
 
 // ---------------------------------------------------------------------------
+// Day 10 — diagnostics overlay. The webview calls this on a fast cadence
+// for the currently visible node set (badges + heatmap + errors-only
+// filter all share the same response). The wire string MUST match
+// ToolNames.UNITY_GRAPH_DIAGNOSTICS (Kotlin) and
+// TOOL_NAMES.UNITY_GRAPH_DIAGNOSTICS (TS). Payload shapes live in
+// ./diagnostics-wire.ts.
+// ---------------------------------------------------------------------------
+
+export const DIAGNOSTICS_GRAPH_TYPE = 'unity_graph_diagnostics' as const;
+
+// ---------------------------------------------------------------------------
 // Day 4 click-through actions. Each one is fired by the webview in response
 // to a user gesture (double-click, right-click → menu item) and routed to the
 // host through the same bridge envelope as `hello` / `snapshot`. Responses
