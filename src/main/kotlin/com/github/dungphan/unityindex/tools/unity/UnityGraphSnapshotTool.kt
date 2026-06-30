@@ -1,11 +1,11 @@
 package com.github.dungphan.unityindex.tools.unity
 
 import com.github.dungphan.unityindex.constants.ToolNames
+import com.github.dungphan.unityindex.graph.GraphSnapshotCache
 import com.github.dungphan.unityindex.server.models.ToolCallResult
 import com.github.dungphan.unityindex.tools.AbstractMcpTool
 import com.github.dungphan.unityindex.tools.models.GraphSnapshotRequest
 import com.github.dungphan.unityindex.tools.schema.SchemaBuilder
-import com.github.dungphan.unityindex.util.UnityAssetGraphBuilder
 import com.intellij.openapi.project.Project
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -88,12 +88,14 @@ class UnityGraphSnapshotTool : AbstractMcpTool() {
         }
 
         return try {
-            // UnityAssetGraphBuilder touches VFS + parses raw YAML — no PSI.
-            // Wrapping in a platform read action held the read lock through a
-            // multi-minute walk on large projects, starving write-intent actions
-            // and freezing the EDT. Run on IO instead.
+            // GraphSnapshotCache routes unfiltered reads through its cached
+            // snapshot (Day 7) and filtered reads through UnityAssetGraphBuilder,
+            // which touches VFS + parses raw YAML — no PSI. Wrapping in a
+            // platform read action held the read lock through a multi-minute
+            // walk on large projects, starving write-intent actions and
+            // freezing the EDT. Run on IO instead.
             val response = withContext(Dispatchers.IO) {
-                UnityAssetGraphBuilder.build(project, request)
+                GraphSnapshotCache.get(project).snapshot(request)
             }
             createJsonResult(response)
         } catch (e: IllegalStateException) {

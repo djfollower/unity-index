@@ -38,6 +38,12 @@ export interface SnapshotRequest extends BaseRequest {
 export interface SnapshotResponse extends BaseResponse {
   snapshot: GraphSnapshot;
   page?: PageResponse;
+  /** Day 7 — revision number at which the host minted this snapshot.
+   *  Clients pass this back as `since_revision` on a subsequent
+   *  `unity_graph_snapshot_delta` call. Omitted by hosts that pre-date
+   *  delta support; the client should treat its absence as "delta updates
+   *  are unavailable, keep polling full snapshots." */
+  revision?: number;
 }
 
 export type RpcErrorKind =

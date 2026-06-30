@@ -9,6 +9,7 @@ import { HttpServer } from "./server/httpServer";
 import { ReadinessGate } from "./server/readinessGate";
 import { ToolContext } from "./tools/abstractTool";
 import { UnityAssetIndexManager } from "./utils/unityAssetIndexManager";
+import { GraphSnapshotCache } from "./utils/graphSnapshotCache";
 
 // Navigation
 import { FindReferencesTool } from "./tools/navigation/findReferencesTool";
@@ -43,6 +44,7 @@ import { FindGetComponentPatternsTool } from "./tools/unity/findGetComponentPatt
 import { GetApiUsageTool } from "./tools/unity/getApiUsageTool";
 import { FindAssetReferencesTool } from "./tools/unity/findAssetReferencesTool";
 import { UnityGraphSnapshotTool } from "./tools/unity/unityGraphSnapshotTool";
+import { UnityGraphSnapshotDeltaTool } from "./tools/unity/unityGraphSnapshotDeltaTool";
 import { UnityGraphNeighborsTool } from "./tools/unity/unityGraphNeighborsTool";
 import { UnityGraphImpactTool } from "./tools/unity/unityGraphImpactTool";
 import { UnityGraphContextTool } from "./tools/unity/unityGraphContextTool";
@@ -57,6 +59,7 @@ interface RunningServer {
   http: HttpServer;
   readiness: ReadinessGate;
   assetIndex: UnityAssetIndexManager;
+  graphCache: GraphSnapshotCache;
   port: number;
   socketPath?: string;
 }
@@ -100,6 +103,7 @@ function buildRegistry(): ToolRegistry {
   registry.register(new GetApiUsageTool());
   registry.register(new FindAssetReferencesTool());
   registry.register(new UnityGraphSnapshotTool());
+  registry.register(new UnityGraphSnapshotDeltaTool());
   registry.register(new UnityGraphNeighborsTool());
   registry.register(new UnityGraphImpactTool());
   registry.register(new UnityGraphContextTool());
@@ -132,10 +136,17 @@ async function startServer(): Promise<void> {
 
   const readiness = new ReadinessGate();
   readiness.start();
-  const assetIndex = new UnityAssetIndexManager(log);
+  const graphCache = new GraphSnapshotCache(log);
+  const assetIndex = new UnityAssetIndexManager(log, graphCache);
 
   const registry = buildRegistry();
-  const toolCtx: ToolContext = { readiness, readinessTimeoutMs, log, assetIndex };
+  const toolCtx: ToolContext = {
+    readiness,
+    readinessTimeoutMs,
+    log,
+    assetIndex,
+    graphCache,
+  };
   const handler = new JsonRpcHandler(registry, toolCtx);
   const http = new HttpServer(handler, log);
 
@@ -166,6 +177,7 @@ async function startServer(): Promise<void> {
     http,
     readiness,
     assetIndex,
+    graphCache,
     port,
     socketPath: useUnixSocket ? socketPath : undefined,
   };
@@ -182,6 +194,7 @@ async function stopServer(): Promise<void> {
   await running.http.stop();
   running.readiness.stop();
   running.assetIndex.dispose();
+  running.graphCache.dispose();
   if (running.socketPath && process.platform !== "win32") {
     try { fs.unlinkSync(running.socketPath); } catch { /* ignore */ }
   }

@@ -37,6 +37,9 @@ instead of raw text grep, dramatically reducing token usage and improving AI age
         <!-- Project-level diagnostics analysis service -->
         <projectService serviceImplementation="com.github.dungphan.unityindex.tools.intelligence.DiagnosticsAnalysisService"/>
 
+        <!-- Day 7 — project-scoped snapshot cache + VFS listener for graph deltas -->
+        <projectService serviceImplementation="com.github.dungphan.unityindex.graph.GraphSnapshotCache"/>
+
         <!-- Settings -->
         <applicationService serviceImplementation="com.github.dungphan.unityindex.settings.McpSettings"/>
         <applicationConfigurable id="unity-index-mcp.settings" displayName="Unity Index MCP Server" instance="com.github.dungphan.unityindex.settings.McpSettingsConfigurable"/>

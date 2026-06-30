@@ -34,6 +34,16 @@ export interface HelloGraphResponse {
 export const SNAPSHOT_GRAPH_TYPE = 'unity_graph_snapshot' as const;
 
 // ---------------------------------------------------------------------------
+// Day 7 — incremental snapshot updates. Sent over the bridge by the webview
+// after it has cached a full snapshot and remembered its `revision`. The wire
+// string MUST match ToolNames.UNITY_GRAPH_SNAPSHOT_DELTA (Kotlin) and
+// TOOL_NAMES.UNITY_GRAPH_SNAPSHOT_DELTA (TS). Payload shapes live in
+// ./snapshot-delta-wire.ts.
+// ---------------------------------------------------------------------------
+
+export const SNAPSHOT_DELTA_GRAPH_TYPE = 'unity_graph_snapshot_delta' as const;
+
+// ---------------------------------------------------------------------------
 // Day 6 — neighbors / impact / context. The webview does not call these over
 // the bridge today (it traverses the in-memory Graphology graph locally — see
 // graph-day6-tasks.md Task 7). The constants live here so Day 11 (saved

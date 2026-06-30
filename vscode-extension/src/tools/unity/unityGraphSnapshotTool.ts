@@ -5,7 +5,6 @@ import { ToolCallResult } from "../../models/jsonRpc";
 import { ProjectContext } from "../../server/projectResolver";
 import { Args } from "../../utils/args";
 import { SchemaBuilder } from "../../utils/schema";
-import { buildAssetGraph } from "../../utils/unityAssetGraphBuilder";
 
 /**
  * Day 2 MCP surface for the Unity asset graph. Wire format documented in
@@ -74,8 +73,8 @@ export class UnityGraphSnapshotTool extends AbstractMcpTool {
     const request = args as unknown as SnapshotRequest;
     try {
       const index = await ctx.assetIndex.get(project);
-      const response = await buildAssetGraph(
-        project.rootPath,
+      const response = await ctx.graphCache.getSnapshot(
+        project,
         index,
         request,
         ctx.signal,

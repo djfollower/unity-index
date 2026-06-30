@@ -4,6 +4,7 @@ import { ProjectContext } from "../server/projectResolver";
 import { Args } from "../utils/args";
 import { ReadinessGate } from "../server/readinessGate";
 import { UnityAssetIndexManager } from "../utils/unityAssetIndexManager";
+import { GraphSnapshotCache } from "../utils/graphSnapshotCache";
 
 export interface ToolContext {
   readiness: ReadinessGate;
@@ -11,6 +12,8 @@ export interface ToolContext {
   readinessTimeoutMs: number;
   log: (msg: string) => void;
   assetIndex: UnityAssetIndexManager;
+  /** Day 7 — workspace-scoped snapshot cache for unity_graph_snapshot{,_delta}. */
+  graphCache: GraphSnapshotCache;
   /** Aborts in-flight scans when the HTTP request is dropped or watchdog fires. */
   signal?: AbortSignal;
 }

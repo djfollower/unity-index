@@ -5,13 +5,22 @@
   import type { SnapshotResponse } from '@unity-index/graph-core';
   import { pickBridge } from './bridge/pick';
   import { fetchSnapshot, friendlyErrorMessage } from './lib/snapshot';
+  import { fetchSnapshotDelta } from './lib/delta';
+  import { applyDeltaToGraph } from './lib/applyDelta';
   import { buildGraphologyGraph } from './lib/snapshotToGraph';
   import {
     HARD_RENDER_CAP,
-    SOFT_LAYOUT_CAP,
+    LayoutSupervisor,
+    isWorkerSupported,
     layoutCircular,
     layoutForceAtlas2,
   } from './lib/layout';
+  import {
+    buildClustering,
+    emptyClustering,
+    LOD_THRESHOLD,
+    type Clustering,
+  } from './lib/clustering';
   import { edgeStyleFor, nodeStyleFor } from './lib/style';
   import { attachDragBehavior } from './lib/drag';
   import SelectionPanel from './lib/SelectionPanel.svelte';
@@ -72,9 +81,35 @@
   let hydrated = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Day 7 Task 6 — delta polling. Polls every DELTA_POLL_MS while the panel
+  // is open and the host advertises a `revision`. On a delta response we
+  // apply in place to currentGraph (preserving camera/layout/selection); on
+  // a reset response we re-render via the carried snapshot. `currentRevision`
+  // is null when delta support is unavailable (pre-Day-7 host).
+  const DELTA_POLL_MS = 1500;
+  let currentRevision: number | null = null;
+  let deltaPollTimer: ReturnType<typeof setInterval> | null = null;
+  let deltaInFlight = false;
+
+  // Day 7 Task 7 — worker-backed FA2 supervisor. One instance per active
+  // Graphology graph; killed when the graph is replaced or the panel closes.
+  // Null while standalone/placeholder or when Worker is unsupported.
+  let layoutSupervisor: LayoutSupervisor | null = null;
+  // How long to let the worker iterate on each (re)kick. The initial bake
+  // gets a longer budget; delta-driven kicks just need enough to settle the
+  // handful of newly-added nodes.
+  const INITIAL_LAYOUT_MS = 5000;
+  const DELTA_LAYOUT_KICK_MS = 1500;
+
   // Mirror Svelte's reactive selectedNode into a plain ref the Sigma
   // reducers can read each frame without going through the reactivity system.
   let selectedRef: string | null = null;
+
+  // Day 7 Task 8 — folder LOD clustering. `clusteringRef` is recomputed
+  // after every snapshot load / delta apply; `inLodRef` flips true once
+  // the camera zooms past LOD_THRESHOLD, driving reducer-side collapse.
+  let clusteringRef: Clustering = emptyClustering();
+  let inLodRef = false;
 
   // Same pattern for filter store: per-frame reducer reads must not go
   // through the reactivity system or every redraw triggers an update cycle.
@@ -144,14 +179,22 @@
 
   function renderSnapshot(res: SnapshotResponse): void {
     const { graph, droppedEdges } = buildGraphologyGraph(res.snapshot);
-    // Soft cap: above SOFT_LAYOUT_CAP, main-thread ForceAtlas2 freezes the
-    // UI long enough to be annoying. Fall back to a circular ring (O(n))
-    // until Day 7's worker layout ships. Track the choice for the status bar.
-    const overSoftCap = graph.order > SOFT_LAYOUT_CAP;
-    if (overSoftCap) {
-      layoutCircular(graph);
+    // Day 7 Task 7 — layout runs in a Web Worker when available. The
+    // supervisor seeds positions synchronously (so the first Sigma frame
+    // already shows a meaningful layout) and then iterates off-thread for
+    // INITIAL_LAYOUT_MS. Falls back to the sync FA2 pass when Worker is
+    // unavailable (tests, restrictive hosts).
+    layoutSupervisor?.kill();
+    layoutSupervisor = null;
+    const useWorker = isWorkerSupported();
+    if (!useWorker) {
+      if (graph.order > 0) layoutForceAtlas2(graph);
+    } else if (graph.order === 0) {
+      // No-op: empty graph.
     } else {
-      layoutForceAtlas2(graph);
+      // Hand off to the supervisor (which performs its own seed pass).
+      // Created here, started after Sigma is built so the worker's per-tick
+      // graph mutations drive the renderer that's about to attach.
     }
     detachDrag?.();
     sigma?.kill();
@@ -166,6 +209,25 @@
       nodeReducer: (node, attrs) => {
         const kind = attrs.kind as string;
         const style = nodeStyleFor(kind);
+        // Day 7 Task 8 — folder LOD. When zoomed out past LOD_THRESHOLD,
+        // hide every node that isn't its cluster's representative; the
+        // representatives get a folder-aggregate label + scaled size. We
+        // run this BEFORE the focus / kind / search gates because the
+        // collapse should win over those — at far zoom the user can't see
+        // individual filtered nodes anyway, and we want the cluster shape.
+        if (inLodRef && clusteringRef.clusterCount > 0) {
+          const repAttrs = clusteringRef.repAttrs.get(node);
+          if (!repAttrs) {
+            return { ...attrs, hidden: true };
+          }
+          return {
+            ...attrs,
+            label: repAttrs.label,
+            size: repAttrs.size,
+            color: style.color,
+            zIndex: 1,
+          };
+        }
         // Day 6 Task 8 — focus × filter composition (AND):
         //   visible iff focus(if active) AND kind filter AND search(if active).
         if (focusStack.length > 0 && !visibleNodesRef.has(node)) {
@@ -217,6 +279,21 @@
         const g = sigma?.getGraph();
         const source = g?.source(edge);
         const target = g?.target(edge);
+        // Day 7 Task 8 — folder LOD. In cluster mode only the per-pair
+        // representative edges are drawn; everything else (including
+        // intra-cluster edges) is hidden so the screen reads as folder ↔
+        // folder rather than a tangle.
+        if (inLodRef && clusteringRef.clusterCount > 0) {
+          if (!clusteringRef.representativeEdges.has(edge)) {
+            return { ...attrs, hidden: true };
+          }
+          return {
+            ...attrs,
+            color: style.color,
+            size: Math.max(style.size, 1.5),
+            type: style.type,
+          };
+        }
         // Day 6 Task 8 — edge visibility under focus.
         if (focusStack.length > 0 && !visibleEdgesRef.has(edge)) {
           return { ...attrs, hidden: true };
@@ -322,6 +399,26 @@
 
     detachDrag = attachDragBehavior(sigma, graph);
     currentGraph = graph;
+    // Day 7 — start the worker after Sigma exists so per-tick graph mutations
+    // immediately drive a repaint via the existing change listeners.
+    if (useWorker && graph.order > 0) {
+      layoutSupervisor = new LayoutSupervisor(graph);
+      layoutSupervisor.start(INITIAL_LAYOUT_MS);
+    }
+    // Day 7 Task 8 — fresh clustering for the new graph; subscribe to the
+    // camera so we know when to flip into / out of LOD mode.
+    clusteringRef = buildClustering(graph);
+    inLodRef = false;
+    const camera = sigma.getCamera();
+    camera.on('updated', () => {
+      if (!sigma) return;
+      const ratio = camera.ratio;
+      const next = ratio > LOD_THRESHOLD;
+      if (next !== inLodRef) {
+        inLodRef = next;
+        sigma.refresh();
+      }
+    });
     presentKinds = collectPresentKinds(graph);
     // Reconcile any previously-stored hidden kinds against what's actually in
     // this snapshot. If a project no longer has, say, `addressable_group`
@@ -338,9 +435,9 @@
     const droppedTail = droppedEdges > 0
       ? ` · ${droppedEdges} dangling edge${droppedEdges === 1 ? '' : 's'} (csharp targets land Day 8)`
       : '';
-    const layoutTail = overSoftCap
-      ? ` · graph too large for default layout (${graph.order.toLocaleString()} nodes) — Day 7 will fix`
-      : '';
+    const layoutTail = useWorker
+      ? ''
+      : ` · layout running on main thread (Worker unavailable)`;
     baseStatus = `${snapshotSummary(res)}${droppedTail}${layoutTail}`;
     status = baseStatus;
   }
@@ -399,6 +496,7 @@
     try {
       const res = await fetchSnapshot(bridgeRef.bridge);
       lastSnapshot = res;
+      currentRevision = res.revision ?? null;
       resetFocus();
       if (res.snapshot.nodes.length === 0) {
         viewState = 'empty';
@@ -418,6 +516,7 @@
         // stored kinds the snapshot doesn't carry anymore. Failures here are
         // not fatal — the panel still works with a fresh in-memory store.
         await hydrateFilterState();
+        startDeltaPolling();
       }
       console.log('[unity-index-graph] snapshot:', res);
     } catch (e) {
@@ -426,6 +525,85 @@
       errorCopy = friendlyErrorMessage(raw);
       status = `error: ${errorCopy}`;
       console.warn('[unity-index-graph] snapshot failed:', e);
+    }
+  }
+
+  function startDeltaPolling(): void {
+    // Pre-Day-7 hosts omit `revision`; in that case stay on full-snapshot
+    // semantics and never poll. Also skip when the panel is showing a
+    // placeholder (standalone) or when already polling.
+    if (currentRevision === null) return;
+    if (!bridgeRef || bridgeRef.host === 'standalone') return;
+    if (deltaPollTimer) return;
+    deltaPollTimer = setInterval(() => void pollDelta(), DELTA_POLL_MS);
+  }
+
+  function stopDeltaPolling(): void {
+    if (deltaPollTimer) {
+      clearInterval(deltaPollTimer);
+      deltaPollTimer = null;
+    }
+  }
+
+  async function pollDelta(): Promise<void> {
+    if (deltaInFlight) return;
+    if (currentRevision === null) return;
+    if (!bridgeRef || bridgeRef.host === 'standalone') return;
+    if (!currentGraph) return;
+    deltaInFlight = true;
+    try {
+      const res = await fetchSnapshotDelta(bridgeRef.bridge, currentRevision);
+      if (res.reset) {
+        // Cache cold / history exhausted / phase changed — re-render from
+        // the carried full snapshot rather than refetching.
+        if (!res.snapshot) {
+          console.warn('[unity-index-graph] delta reset without snapshot payload');
+          return;
+        }
+        const synthetic: SnapshotResponse = {
+          generated_at: res.generated_at,
+          snapshot: res.snapshot,
+          revision: res.new_revision,
+        };
+        if (res.request_id !== undefined) synthetic.request_id = res.request_id;
+        if (res.warnings !== undefined) synthetic.warnings = res.warnings;
+        lastSnapshot = synthetic;
+        currentRevision = res.new_revision;
+        resetFocus();
+        renderSnapshot(synthetic);
+        return;
+      }
+      if (!res.delta) return;
+      // Same revision → no-op; the host had nothing new for us.
+      if (res.delta.new_revision === currentRevision) {
+        return;
+      }
+      const result = applyDeltaToGraph(currentGraph, res.delta);
+      currentRevision = res.new_revision;
+      if (lastSnapshot) {
+        // Stay reactive so the focus / status effects pick up the new revision.
+        lastSnapshot = { ...lastSnapshot, revision: res.new_revision };
+      }
+      if (result.hadChanges) {
+        // Filter set and visible-kinds row counts depend on what's currently
+        // in the graph; recompute. The search effect also re-runs on
+        // currentGraph identity, but the same Graph reference here means we
+        // need to bump matched/related explicitly. Cheapest path: bump the
+        // filter store revision so dependent effects re-fire.
+        presentKinds = collectPresentKinds(currentGraph);
+        // Re-kick the worker so newly-added nodes (which start at random
+        // [-1, 1]) settle next to their neighbours instead of sitting at
+        // the origin. Short burst — most deltas touch a handful of nodes.
+        layoutSupervisor?.kick(DELTA_LAYOUT_KICK_MS);
+        // Cluster membership may have shifted (added/removed nodes change
+        // which cluster owns each rep / which inter-cluster pairs exist).
+        clusteringRef = buildClustering(currentGraph);
+        sigma?.refresh();
+      }
+    } catch (e) {
+      console.warn('[unity-index-graph] delta poll failed:', e);
+    } finally {
+      deltaInFlight = false;
     }
   }
 
@@ -519,11 +697,16 @@
   });
 
   onDestroy(() => {
+    stopDeltaPolling();
+    layoutSupervisor?.kill();
+    layoutSupervisor = null;
     detachDrag?.();
     detachDrag = null;
     sigma?.kill();
     sigma = null;
     currentGraph = null;
+    clusteringRef = emptyClustering();
+    inLodRef = false;
     resetFocusCache();
     if (saveTimer) {
       clearTimeout(saveTimer);

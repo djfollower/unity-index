@@ -27,6 +27,7 @@ export type {
 export {
   HELLO_GRAPH_TYPE,
   SNAPSHOT_GRAPH_TYPE,
+  SNAPSHOT_DELTA_GRAPH_TYPE,
   OPEN_FILE_TYPE,
   FIND_USAGES_TYPE,
   REVEAL_IN_EXPLORER_TYPE,
@@ -98,3 +99,22 @@ export {
   WARNING_ID_UNRESOLVED,
   WARNING_NEIGHBORS_TRUNCATED,
 } from './snapshot-wire.js';
+
+export type {
+  EdgeKey,
+  SnapshotDelta,
+  SnapshotDeltaRequest,
+  SnapshotDeltaResponse,
+} from './snapshot-delta-wire.js';
+
+export type { DiffSnapshotsOptions } from './snapshot-diff.js';
+export { diffSnapshots, isEmptyDelta } from './snapshot-diff.js';
+export {
+  edgeKey,
+  isApplicableDelta,
+  EDGE_KEY_SEPARATOR,
+  SNAPSHOT_DELTA_MAX_HISTORY,
+  SNAPSHOT_DELTA_AFFECTED_PATHS_CAP,
+  WARNING_DELTA_RESET,
+  WARNING_DELTA_AFFECTED_PATHS_TRUNCATED,
+} from './snapshot-delta-wire.js';

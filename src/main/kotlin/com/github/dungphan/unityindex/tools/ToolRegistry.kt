@@ -27,6 +27,7 @@ import com.github.dungphan.unityindex.tools.unity.GetUnityEventBindingsTool
 import com.github.dungphan.unityindex.tools.unity.UnityGraphContextTool
 import com.github.dungphan.unityindex.tools.unity.UnityGraphImpactTool
 import com.github.dungphan.unityindex.tools.unity.UnityGraphNeighborsTool
+import com.github.dungphan.unityindex.tools.unity.UnityGraphSnapshotDeltaTool
 import com.github.dungphan.unityindex.tools.unity.UnityGraphSnapshotTool
 import com.intellij.openapi.diagnostic.logger
 import java.util.concurrent.ConcurrentHashMap
@@ -132,6 +133,7 @@ class ToolRegistry {
         register(GetApiUsageTool())
         register(FindAssetReferencesTool())
         register(UnityGraphSnapshotTool())
+        register(UnityGraphSnapshotDeltaTool())
         register(UnityGraphNeighborsTool())
         register(UnityGraphImpactTool())
         register(UnityGraphContextTool())

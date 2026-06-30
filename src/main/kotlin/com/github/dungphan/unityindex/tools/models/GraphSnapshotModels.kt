@@ -128,4 +128,64 @@ data class GraphSnapshotResponse(
     val warnings: List<GraphWarning>? = null,
     val snapshot: GraphSnapshot,
     val page: GraphPageResponse? = null,
+    /**
+     * Day 7 — revision at which the host minted this snapshot. The client
+     * stores this alongside the cached snapshot and passes it back as
+     * `since_revision` on `unity_graph_snapshot_delta`. Omitted by hosts
+     * that do not maintain incremental state (delta updates unavailable).
+     */
+    val revision: Int? = null,
+)
+
+// ---------------------------------------------------------------------------
+// Day 7 — incremental snapshot updates. Mirrors graph/core/src/snapshot-
+// delta-wire.ts; see that file for the canonical contract documentation.
+// Both implementations MUST emit the same field names and the same
+// reset-vs-delta discriminator so a single MCP client config works against
+// either host.
+// ---------------------------------------------------------------------------
+
+@Serializable
+data class GraphEdgeKey(
+    val source: String,
+    val target: String,
+    val kind: EdgeKind,
+)
+
+@Serializable
+data class GraphSnapshotDelta(
+    val base_revision: Int,
+    val new_revision: Int,
+    val generated_at: String,
+    val source_phase: GraphSourcePhase,
+    val nodes_added: List<GraphNode>,
+    val nodes_removed: List<String>,
+    val nodes_updated: List<GraphNode>,
+    val edges_added: List<GraphEdge>,
+    val edges_removed: List<GraphEdgeKey>,
+    val stats: GraphStats,
+    val affected_paths: List<String>? = null,
+)
+
+@Serializable
+data class GraphSnapshotDeltaRequest(
+    val project_path: String? = null,
+    val request_id: String? = null,
+    /** Pass 0 to force a reset path (bootstrap, no client cache). */
+    val since_revision: Int,
+    val include_kinds: List<NodeKind>? = null,
+    val exclude_kinds: List<NodeKind>? = null,
+    val path_globs: List<String>? = null,
+    val include_orphans: Boolean? = null,
+)
+
+@Serializable
+data class GraphSnapshotDeltaResponse(
+    val request_id: String? = null,
+    val generated_at: String,
+    val warnings: List<GraphWarning>? = null,
+    val reset: Boolean,
+    val new_revision: Int,
+    val delta: GraphSnapshotDelta? = null,
+    val snapshot: GraphSnapshot? = null,
 )
