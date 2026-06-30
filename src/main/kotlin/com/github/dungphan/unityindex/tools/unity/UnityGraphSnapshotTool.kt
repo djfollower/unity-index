@@ -5,7 +5,9 @@ import com.github.dungphan.unityindex.graph.GraphSnapshotCache
 import com.github.dungphan.unityindex.server.models.ToolCallResult
 import com.github.dungphan.unityindex.tools.AbstractMcpTool
 import com.github.dungphan.unityindex.tools.models.GraphSnapshotRequest
+import com.github.dungphan.unityindex.tools.models.GraphSnapshotResponse
 import com.github.dungphan.unityindex.tools.schema.SchemaBuilder
+import com.github.dungphan.unityindex.util.GraphClassAnchors
 import com.intellij.openapi.project.Project
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -32,7 +34,7 @@ class UnityGraphSnapshotTool : AbstractMcpTool() {
 
         Sub-file kinds (`component_instance`, `component_field`) are never returned as top-level nodes; their counts go into `stats.skipped_component_*` and the underlying IDs ride along as edge metadata. Use `unity_graph_expand` (Phase 1, ships Day 6 or 7) to materialize them for a single container.
 
-        `script_declares_class` edges point to `unity://csharp/T:<ClassName>` IDs that Day 8 (`unity_graph_code_edges`) will materialize. A single `dangling_csharp_targets` warning is emitted when any such edges are present.
+        `script_declares_class` edges point to `unity://csharp/T:<ClassName>` IDs that Day 8 (`unity_graph_code_edges`) will materialize. A single `dangling_csharp_targets` warning is emitted when any such edges are present (set `include_class_anchors=true` to suppress).
 
         Parameters:
         - include_kinds (optional): NodeKind[] — keep only nodes of these kinds.
@@ -63,6 +65,7 @@ class UnityGraphSnapshotTool : AbstractMcpTool() {
             put("items", buildJsonObject { put("type", JsonPrimitive("string")) })
         })
         .booleanProperty("include_orphans", "Default true. When false, nodes with degree 0 are dropped.")
+        .booleanProperty("include_class_anchors", "Default false. When true, materialize one `class` node per `script_declares_class` edge target (anchor=true) so the UI has stable IDs to attach Day 8 code edges to. Suppresses the dangling_csharp_targets warning.")
         .property("pagination", buildJsonObject {
             put("type", JsonPrimitive("object"))
             put("description", JsonPrimitive("Opaque pagination cursor. Slice nodes; edges crossing the page boundary are dropped."))
@@ -97,12 +100,25 @@ class UnityGraphSnapshotTool : AbstractMcpTool() {
             val response = withContext(Dispatchers.IO) {
                 GraphSnapshotCache.get(project).snapshot(request)
             }
-            createJsonResult(response)
+            createJsonResult(applyClassAnchors(response, request))
         } catch (e: IllegalStateException) {
             createErrorResult(e.message ?: "Failed to build asset graph")
         } catch (e: Exception) {
             createErrorResult("Failed to build asset graph: ${e.message}")
         }
+    }
+
+    /** Day 8.4 — opt-in projection applied AFTER the cache so the cached
+     *  unfiltered snapshot stays anchor-free and cold reads that don't ask
+     *  for them stay cheap. Pure: `response` is not mutated. */
+    private fun applyClassAnchors(
+        response: GraphSnapshotResponse,
+        request: GraphSnapshotRequest,
+    ): GraphSnapshotResponse {
+        if (request.include_class_anchors != true) return response
+        val result = GraphClassAnchors.materialize(response.snapshot, response.warnings)
+        if (result.anchorsAdded == 0) return response
+        return response.copy(snapshot = result.snapshot, warnings = result.warnings)
     }
 
 }

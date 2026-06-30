@@ -57,6 +57,17 @@ export const IMPACT_GRAPH_TYPE = 'unity_graph_impact' as const;
 export const CONTEXT_GRAPH_TYPE = 'unity_graph_context' as const;
 
 // ---------------------------------------------------------------------------
+// Day 8 — batch C# semantic edges. The webview calls this after the user
+// expands a class/script node so we can lazily pull inheritance / call /
+// reference edges without paying for them on initial load. The wire string
+// MUST match ToolNames.UNITY_GRAPH_CODE_EDGES (Kotlin) and
+// TOOL_NAMES.UNITY_GRAPH_CODE_EDGES (TS). Payload shapes live in
+// ./code-edges-wire.ts.
+// ---------------------------------------------------------------------------
+
+export const CODE_EDGES_GRAPH_TYPE = 'unity_graph_code_edges' as const;
+
+// ---------------------------------------------------------------------------
 // Day 4 click-through actions. Each one is fired by the webview in response
 // to a user gesture (double-click, right-click → menu item) and routed to the
 // host through the same bridge envelope as `hello` / `snapshot`. Responses

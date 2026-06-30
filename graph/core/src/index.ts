@@ -36,7 +36,23 @@ export {
   NEIGHBORS_GRAPH_TYPE,
   IMPACT_GRAPH_TYPE,
   CONTEXT_GRAPH_TYPE,
+  CODE_EDGES_GRAPH_TYPE,
 } from './messages.js';
+
+export type {
+  CodeEdgeKind,
+  CodeEdgesRequest,
+  CodeEdgesResponse,
+  MethodCallKind,
+  MethodCallSite,
+} from './code-edges-wire.js';
+export { CODE_EDGES_MAX_SYMBOLS } from './code-edges-wire.js';
+
+export type {
+  MaterializeOptions,
+  MaterializeResult,
+} from './class-anchors.js';
+export { materializeClassAnchors } from './class-anchors.js';
 
 export type {
   AdjacencyIndex,

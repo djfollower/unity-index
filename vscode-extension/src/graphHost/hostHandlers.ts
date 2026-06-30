@@ -11,6 +11,8 @@
 // because graph-core ships ESM and this extension is CJS.
 
 import type {
+  CodeEdgesRequest,
+  CodeEdgesResponse,
   FilterState,
   FindUsagesRequest,
   FindUsagesResponse,
@@ -31,6 +33,8 @@ import * as vscode from "vscode";
 import { resolveFilePath, resolveProject } from "../server/projectResolver";
 import { UnityAssetIndexManager } from "../utils/unityAssetIndexManager";
 import { buildAssetGraph } from "../utils/unityAssetGraphBuilder";
+import { harvestCodeEdges } from "../tools/unity/unityGraphCodeEdgesTool";
+import { materializeClassAnchors } from "@unity-index/graph-core";
 
 const HELLO_GRAPH_TYPE = "unity_graph_hello"; // mirror of graph/core HELLO_GRAPH_TYPE
 const SNAPSHOT_GRAPH_TYPE = "unity_graph_snapshot"; // mirror of graph/core SNAPSHOT_GRAPH_TYPE
@@ -41,6 +45,8 @@ const REVEAL_IN_EXPLORER_TYPE = "unity_graph_reveal_in_explorer";
 // Day 5 filter persistence — mirrors of graph/core GET/SET_FILTER_STATE_TYPE.
 const GET_FILTER_STATE_TYPE = "unity_graph_get_filter_state";
 const SET_FILTER_STATE_TYPE = "unity_graph_set_filter_state";
+// Day 8.5 — lazy code-edge expansion. Mirror of graph/core CODE_EDGES_GRAPH_TYPE.
+const CODE_EDGES_TYPE = "unity_graph_code_edges";
 
 // workspaceState key. Scoped per-workspace so each Unity project keeps its
 // own filter view (matches the "persists per workspace" Day 5 requirement).
@@ -93,6 +99,9 @@ export async function dispatchRequest(
     case SET_FILTER_STATE_TYPE: {
       return handleSetFilterState(payload, ctx);
     }
+    case CODE_EDGES_TYPE: {
+      return handleCodeEdges(payload);
+    }
     default:
       throw new Error(`unity_graph: unknown request type '${type}'`);
   }
@@ -135,6 +144,26 @@ async function handleSetFilterState(
   return { saved: true };
 }
 
+/** Day 8.5 — lazy code-edge expansion from the webview. Routes through the
+ *  same in-process harvester the MCP tool uses (no HTTP hop). Project
+ *  resolution mirrors handleSnapshot so the webview doesn't have to know
+ *  which workspace folder is bound. */
+async function handleCodeEdges(payload: unknown): Promise<CodeEdgesResponse> {
+  const req = (payload ?? {}) as Partial<CodeEdgesRequest>;
+  const projectPath = typeof req.project_path === "string" ? req.project_path : undefined;
+  const resolved = resolveProject(projectPath);
+  if (resolved.errorResult || !resolved.project) {
+    const text = resolved.errorResult?.content?.[0]?.text ?? "unknown_project_error";
+    throw new Error(text);
+  }
+  const request: CodeEdgesRequest = {
+    ...req,
+    project_path: resolved.project.rootPath,
+    symbol_ids: Array.isArray(req.symbol_ids) ? req.symbol_ids : [],
+  };
+  return harvestCodeEdges(resolved.project.rootPath, request);
+}
+
 async function handleSnapshot(
   payload: unknown,
   ctx: HostHandlerContext,
@@ -166,7 +195,26 @@ async function handleSnapshot(
     ...req,
     project_path: resolved.project.rootPath,
   };
-  return buildAssetGraph(resolved.project.rootPath, index, request);
+  const response = await buildAssetGraph(resolved.project.rootPath, index, request);
+  // Day 8.4 — mirror the projection UnityGraphSnapshotTool.applyClassAnchors
+  // does on the MCP tool path. The bridge skips that wrapper, so without
+  // this the webview's `include_class_anchors: true` is silently ignored,
+  // csharp anchors never materialize, snapshotToGraph drops the
+  // `script_declares_class` edges as dangling, and `anchorIdFor` can't
+  // resolve a code anchor → "Expand code edges" disappears from the menu.
+  if (request.include_class_anchors) {
+    const result = materializeClassAnchors(response.snapshot, {
+      warnings: response.warnings,
+    });
+    if (result.anchorsAdded > 0) {
+      return {
+        ...response,
+        snapshot: result.snapshot,
+        warnings: result.warnings,
+      };
+    }
+  }
+  return response;
 }
 
 // ---------------------------------------------------------------------------

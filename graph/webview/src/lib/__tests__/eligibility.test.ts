@@ -74,6 +74,7 @@ describe('eligibility.actionsForNode', () => {
       hasPath: true,
       hasGuid: true,
       hasIncomingEdges: true,
+      hasCodeAnchor: true,
     }).map((a) => a.id);
     expect(subset).toEqual(order); // matches the canonical sort
   });
@@ -81,6 +82,26 @@ describe('eligibility.actionsForNode', () => {
   it('marks copy_guid plus the Day-6 focus actions as synchronous', () => {
     const sync = ALL_ACTIONS.filter((a) => a.isSync).map((a) => a.id);
     expect(sync).toEqual(['focus_neighborhood', 'show_impact', 'copy_guid']);
+  });
+
+  it('shows expand_code_edges only when an anchor exists and is not yet expanded', () => {
+    const facts = {
+      kind: 'script' as const,
+      hasPath: true,
+      hasGuid: true,
+      hasIncomingEdges: true,
+    };
+    expect(
+      actionsForNode({ ...facts }).map((a) => a.id),
+    ).not.toContain('expand_code_edges');
+    expect(
+      actionsForNode({ ...facts, hasCodeAnchor: true }).map((a) => a.id),
+    ).toContain('expand_code_edges');
+    expect(
+      actionsForNode({ ...facts, hasCodeAnchor: true, codeEdgesExpanded: true }).map(
+        (a) => a.id,
+      ),
+    ).not.toContain('expand_code_edges');
   });
 
   it('isEligible matches actionsForNode for every kind+facts combo', () => {

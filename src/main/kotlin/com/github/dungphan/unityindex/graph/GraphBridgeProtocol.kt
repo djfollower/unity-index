@@ -39,4 +39,10 @@ object GraphWireTypes {
     // GET_FILTER_STATE_TYPE / SET_FILTER_STATE_TYPE.
     const val GET_FILTER_STATE = "unity_graph_get_filter_state"
     const val SET_FILTER_STATE = "unity_graph_set_filter_state"
+
+    // Day 8.5 — batch C# semantic-edge harvest, invoked when the user expands
+    // a class/script anchor in the webview. Mirror of graph/core/src/messages
+    // .ts CODE_EDGES_GRAPH_TYPE; also matches ToolNames.UNITY_GRAPH_CODE_EDGES
+    // so the same identifier flows through both the bridge and HTTP paths.
+    const val CODE_EDGES = "unity_graph_code_edges"
 }

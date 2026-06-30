@@ -1,6 +1,10 @@
 package com.github.dungphan.unityindex.graph
 
+import com.github.dungphan.unityindex.tools.models.CodeEdgesRequest
+import com.github.dungphan.unityindex.tools.models.CodeEdgesResponse
 import com.github.dungphan.unityindex.tools.models.GraphSnapshotRequest
+import com.github.dungphan.unityindex.tools.unity.UnityGraphCodeEdgesTool
+import com.github.dungphan.unityindex.util.GraphClassAnchors
 import com.github.dungphan.unityindex.util.UnityAssetGraphBuilder
 import com.intellij.ide.actions.RevealFileAction
 import com.intellij.openapi.actionSystem.ActionManager
@@ -44,6 +48,7 @@ object GraphHostHandlers {
             GraphWireTypes.REVEAL_IN_EXPLORER -> handleRevealInExplorer(payload, project)
             GraphWireTypes.GET_FILTER_STATE -> handleGetFilterState(project)
             GraphWireTypes.SET_FILTER_STATE -> handleSetFilterState(payload, project)
+            GraphWireTypes.CODE_EDGES -> handleCodeEdges(payload, project)
             else -> throw IllegalArgumentException("unity_graph: unknown request type '$type'")
         }
     }
@@ -58,6 +63,21 @@ object GraphHostHandlers {
             put("greeting", JsonPrimitive("hello, $name"))
             put("host", JsonPrimitive("rider"))
         }
+    }
+
+    /** Day 8.5 — lazy code-edge expansion from the webview. Routes through
+     *  the same in-process harvester the MCP tool uses (no HTTP hop) and
+     *  bypasses the response formatter so the webview always gets raw JSON
+     *  regardless of the user's `mcp.responseFormat` setting. */
+    private fun handleCodeEdges(payload: JsonElement?, project: Project?): JsonElement {
+        project ?: throw IllegalStateException("no_project_open")
+        val request = decodeOrThrow(
+            payload,
+            CodeEdgesRequest.serializer(),
+            "invalid_code_edges_request",
+        )
+        val response = UnityGraphCodeEdgesTool.runDirect(project, request)
+        return json.encodeToJsonElement(CodeEdgesResponse.serializer(), response)
     }
 
     private fun handleSnapshot(payload: JsonElement?, project: Project?): JsonElement {
@@ -84,7 +104,20 @@ object GraphHostHandlers {
             UnityAssetGraphBuilder.build(project, request)
         }
 
-        return json.encodeToJsonElement(GraphSnapshotResponseSerializer, response)
+        // Day 8.4 — opt-in class-anchor projection. The MCP tool path applies
+        // this in UnityGraphSnapshotTool.applyClassAnchors; the bridge bypasses
+        // the tool, so we mirror the projection here. Without it the webview's
+        // `script_declares_class` targets stay dangling and `anchorIdFor` can't
+        // resolve a code anchor → the "Expand code edges" menu action is
+        // silently filtered out for every node.
+        val withAnchors = if (request.include_class_anchors == true) {
+            val result = GraphClassAnchors.materialize(response.snapshot, response.warnings)
+            if (result.anchorsAdded > 0) {
+                response.copy(snapshot = result.snapshot, warnings = result.warnings)
+            } else response
+        } else response
+
+        return json.encodeToJsonElement(GraphSnapshotResponseSerializer, withAnchors)
     }
 
     // Tiny alias so the call site reads cleanly.

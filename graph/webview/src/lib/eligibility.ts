@@ -14,7 +14,8 @@ export type ActionId =
   | 'reveal_in_explorer'
   | 'copy_guid'
   | 'focus_neighborhood'
-  | 'show_impact';
+  | 'show_impact'
+  | 'expand_code_edges';
 
 export interface ActionDescriptor {
   id: ActionId;
@@ -30,6 +31,7 @@ export interface ActionDescriptor {
 export const ALL_ACTIONS: ActionDescriptor[] = [
   { id: 'focus_neighborhood', label: 'Focus on this node', isSync: true },
   { id: 'show_impact', label: 'Show impact', isSync: true },
+  { id: 'expand_code_edges', label: 'Expand code edges', isSync: false },
   { id: 'open_file', label: 'Open file', isSync: false },
   { id: 'find_usages', label: 'Find usages', isSync: false },
   { id: 'reveal_in_explorer', label: 'Reveal in OS file manager', isSync: false },
@@ -59,6 +61,16 @@ export interface NodeFacts {
   /** Day 6 Task 10: 'show_impact' would be a no-op for orphan leaves where
    *  nothing depends on the node, so the menu hides the action in that case. */
   hasIncomingEdges?: boolean;
+  /** Day 8.5: 'expand_code_edges' requires a resolvable `unity://csharp/T:`
+   *  anchor — true when the caller's host bridge / graph topology can
+   *  identify one (either the node IS the anchor, or it has a
+   *  `script_declares_class` outgoing edge). Hidden when false so the menu
+   *  doesn't tease an action that immediately errors. */
+  hasCodeAnchor?: boolean;
+  /** Day 8.5: once a code anchor has been expanded we hide the action so
+   *  repeated clicks don't refetch. The Day 9 follow-up will replace this
+   *  with a 'Collapse code edges' inverse. */
+  codeEdgesExpanded?: boolean;
 }
 
 /** Decide which actions apply to a node. Order matches ALL_ACTIONS so the
@@ -81,5 +93,7 @@ export function isEligible(action: ActionId, facts: NodeFacts): boolean {
       return true;
     case 'show_impact':
       return facts.hasIncomingEdges === true;
+    case 'expand_code_edges':
+      return facts.hasCodeAnchor === true && facts.codeEdgesExpanded !== true;
   }
 }

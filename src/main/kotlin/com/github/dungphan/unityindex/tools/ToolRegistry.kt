@@ -24,6 +24,7 @@ import com.github.dungphan.unityindex.tools.unity.FindAssetReferencesTool
 import com.github.dungphan.unityindex.tools.unity.GetProjectContextTool
 import com.github.dungphan.unityindex.tools.unity.GetSerializedFieldValuesTool
 import com.github.dungphan.unityindex.tools.unity.GetUnityEventBindingsTool
+import com.github.dungphan.unityindex.tools.unity.UnityGraphCodeEdgesTool
 import com.github.dungphan.unityindex.tools.unity.UnityGraphContextTool
 import com.github.dungphan.unityindex.tools.unity.UnityGraphImpactTool
 import com.github.dungphan.unityindex.tools.unity.UnityGraphNeighborsTool
@@ -137,6 +138,7 @@ class ToolRegistry {
         register(UnityGraphNeighborsTool())
         register(UnityGraphImpactTool())
         register(UnityGraphContextTool())
+        register(UnityGraphCodeEdgesTool())
 
         LOG.info("Registered Unity-specific tools")
     }

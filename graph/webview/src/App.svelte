@@ -5,6 +5,7 @@
   import type { SnapshotResponse } from '@unity-index/graph-core';
   import { pickBridge } from './bridge/pick';
   import { fetchSnapshot, friendlyErrorMessage } from './lib/snapshot';
+  import { anchorIdFor, fetchCodeEdges } from './lib/codeEdges';
   import { fetchSnapshotDelta } from './lib/delta';
   import { applyDeltaToGraph } from './lib/applyDelta';
   import { buildGraphologyGraph } from './lib/snapshotToGraph';
@@ -68,6 +69,15 @@
   // Open context menu state — null when hidden. Coordinates are viewport-
   // relative (event.clientX/Y), so the menu uses position:fixed.
   let menuState: { nodeId: string; x: number; y: number } | null = $state(null);
+
+  // Day 8.5 — set of `unity://csharp/T:...` anchor IDs whose code-edge
+  // expansion has already landed in `currentGraph`. We use this to hide
+  // "Expand code edges" on a node the user already expanded so a second
+  // right-click doesn't refetch identical data. Reset on snapshot reload.
+  let expandedCodeAnchors: Set<string> = $state(new Set());
+  // Coalesces in-flight expansions so a fast double-click on the same
+  // anchor only hits the bridge once.
+  const codeEdgeInflight = new Set<string>();
 
   // Day 5: kinds actually present in the current snapshot, with counts.
   // Drives the FilterSidebar rows. Recomputed after every renderSnapshot.
@@ -494,7 +504,12 @@
     status = 'loading project graph…';
     errorCopy = '';
     try {
-      const res = await fetchSnapshot(bridgeRef.bridge);
+      // Day 8.5 — opt in to class anchors so Day 8 code-edge expansion has
+      // stable IDs to hang results on. The host applies the projection
+      // after its cache lookup (Day 8.4), so this stays cheap.
+      const res = await fetchSnapshot(bridgeRef.bridge, { include_class_anchors: true });
+      expandedCodeAnchors = new Set();
+      codeEdgeInflight.clear();
       lastSnapshot = res;
       currentRevision = res.revision ?? null;
       resetFocus();
@@ -822,6 +837,66 @@
         }
         return;
       }
+      case 'expand_code_edges': {
+        await expandCodeEdgesFor(nodeId);
+        return;
+      }
+    }
+  }
+
+  // Day 8.5 — fetch this node's C# semantic edges (inheritance, calls,
+  // references) and merge them into the live graph. Idempotent: a node
+  // that's already in `expandedCodeAnchors` short-circuits. Layout is left
+  // to the existing supervisor — the new nodes get seeded positions by
+  // `applyDeltaToGraph` and the next FA2 tick will pull them into place.
+  async function expandCodeEdgesFor(nodeId: string): Promise<void> {
+    if (!bridgeRef || bridgeRef.host === 'standalone') return;
+    if (!currentGraph) return;
+    const anchor = anchorIdFor(currentGraph, nodeId);
+    if (!anchor) {
+      status = 'no code anchor for this node';
+      return;
+    }
+    if (expandedCodeAnchors.has(anchor)) {
+      status = 'code edges already loaded for this node';
+      return;
+    }
+    if (codeEdgeInflight.has(anchor)) {
+      return; // dedup concurrent click
+    }
+    codeEdgeInflight.add(anchor);
+    status = `loading code edges for ${anchor.replace('unity://csharp/T:', '')}…`;
+    try {
+      const res = await fetchCodeEdges(bridgeRef.bridge, anchor);
+      // Reuse the delta-merge path so the renderer / layout / focus reducers
+      // get the same code path they'd see from a real incremental update.
+      const result = applyDeltaToGraph(currentGraph, {
+        base_revision: -1,
+        new_revision: -1,
+        generated_at: res.generated_at,
+        source_phase: 'code',
+        nodes_added: res.snapshot.nodes,
+        nodes_removed: [],
+        nodes_updated: [],
+        edges_added: res.snapshot.edges,
+        edges_removed: [],
+        stats: res.snapshot.stats,
+      });
+      expandedCodeAnchors = new Set([...expandedCodeAnchors, anchor]);
+      const added = res.snapshot.nodes.length;
+      const edges = res.snapshot.edges.length;
+      const unresolved = res.unresolved_ids?.length ?? 0;
+      const dropped = result.droppedEdges;
+      const droppedNote = dropped > 0 ? `, ${dropped} dropped` : '';
+      const unresolvedNote = unresolved > 0 ? `, ${unresolved} unresolved` : '';
+      status = `+${added} nodes, +${edges} code edges${droppedNote}${unresolvedNote}`;
+      // Recompute kind palette so any new code kinds (interface, method, …)
+      // show up in the filter sidebar without a full snapshot reload.
+      presentKinds = collectPresentKinds(currentGraph);
+    } catch (e) {
+      status = `code edges failed: ${friendlyActionError((e as Error).message)}`;
+    } finally {
+      codeEdgeInflight.delete(anchor);
     }
   }
 
@@ -895,6 +970,7 @@
       <ContextMenu
         menu={menuState}
         graph={currentGraph}
+        expandedCodeAnchors={expandedCodeAnchors}
         onAction={(action, nodeId) => { void dispatchMenuAction(action, nodeId); }}
         onClose={() => { menuState = null; }}
       />

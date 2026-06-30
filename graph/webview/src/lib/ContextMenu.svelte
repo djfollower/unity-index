@@ -17,16 +17,21 @@
     type ActionId,
     actionsForNode,
   } from './eligibility';
+  import { anchorIdFor } from './codeEdges';
 
   interface Props {
     /** Currently open menu, or `null` when hidden. */
     menu: { nodeId: string; x: number; y: number } | null;
     graph: Graph | null;
+    /** Day 8.5 — set of `unity://csharp/T:...` IDs whose code edges have
+     *  already been fetched. Used to hide the "Expand code edges" action so
+     *  repeated clicks don't refetch the same data. */
+    expandedCodeAnchors: ReadonlySet<string>;
     onAction: (action: ActionId, nodeId: string) => void;
     onClose: () => void;
   }
 
-  let { menu, graph, onAction, onClose }: Props = $props();
+  let { menu, graph, expandedCodeAnchors, onAction, onClose }: Props = $props();
 
   // Derived: which actions to render for the current selection. Empty array
   // hides the menu entirely so we never show an empty popover (which would
@@ -38,7 +43,15 @@
     const hasPath = typeof attrs.path === 'string' && attrs.path.length > 0;
     const hasGuid = typeof attrs.guid === 'string' && attrs.guid.length > 0;
     const hasIncomingEdges = graph.inDegree(menu.nodeId) > 0;
-    return actionsForNode({ kind: kind as never, hasPath, hasGuid, hasIncomingEdges });
+    const anchor = anchorIdFor(graph, menu.nodeId);
+    return actionsForNode({
+      kind: kind as never,
+      hasPath,
+      hasGuid,
+      hasIncomingEdges,
+      hasCodeAnchor: anchor !== undefined,
+      codeEdgesExpanded: anchor !== undefined && expandedCodeAnchors.has(anchor),
+    });
   });
 
   // Pin the menu inside the viewport. Without this, right-clicks near the

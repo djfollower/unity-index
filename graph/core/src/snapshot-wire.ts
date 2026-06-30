@@ -33,6 +33,17 @@ export interface SnapshotRequest extends BaseRequest {
   path_globs?: string[];
   include_orphans?: boolean;
   pagination?: PageRequest;
+  /** Day 8.4 — when true, materialize one `class` node per
+   *  `script_declares_class` edge target so the UI has stable anchors to
+   *  hang Day 8 `unity_graph_code_edges` results on. Default false. The
+   *  anchor node carries `metadata.anchor = true` plus
+   *  `metadata.declaring_script` (the script node id) and inherits the
+   *  script's path so click-through keeps working. Setting this flag also
+   *  suppresses the `dangling_csharp_targets` warning. Pagination,
+   *  `include_kinds`, and `include_orphans` are applied AFTER anchors are
+   *  materialized — set `include_kinds: ['script', 'class', ...]` if you
+   *  want to keep them when filtering. */
+  include_class_anchors?: boolean;
 }
 
 export interface SnapshotResponse extends BaseResponse {

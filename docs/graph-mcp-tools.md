@@ -118,6 +118,11 @@ interface SnapshotRequest extends BaseRequest {
   path_globs?: string[];           // include-only filter; standard glob syntax
   include_orphans?: boolean;       // default true; orphan = node with degree 0
   pagination?: PageRequest;
+  include_class_anchors?: boolean; // Day 8.4; default false. Materialize one
+                                   //   `class` node per `script_declares_class`
+                                   //   target so the webview has anchor IDs for
+                                   //   Day 8 code-edge expansion. Suppresses
+                                   //   the `dangling_csharp_targets` warning.
 }
 ```
 
@@ -131,6 +136,7 @@ interface SnapshotResponse extends BaseResponse {
 
 **Behavior**
 - Asset-domain only by default. To get code nodes, call `unity_graph_code_edges` after.
+- `include_class_anchors=true` adds stub `class` nodes (`metadata.anchor=true`, `metadata.declaring_script=<script-id>`) for every `script_declares_class` target. Anchors carry the declaring script's path, so click-through still works; no code edges are emitted until the caller invokes `unity_graph_code_edges`. The two tools intentionally stay split so that opening the panel doesn't pay the cost of a C# index walk.
 - `path_globs` filter at the node level; edges between in-scope and out-of-scope nodes are dropped.
 - `include_orphans=false` post-filters disconnected nodes; useful for "show me what's actually wired up."
 - Sub-file kinds (`component_instance`, `component_field`) are never returned, even if explicitly requested in `include_kinds`. Use `unity_graph_expand` instead. The response carries `warnings: [{ code: 'subfile_kind_ignored' }]` if requested.
@@ -287,9 +293,16 @@ interface CodeEdgesResponse extends BaseResponse {
 ```
 
 **Behavior**
-- Internally batches calls to `FindUsagesTool`, `TypeHierarchyTool`, `CallHierarchyTool`, `FindImplementationsTool`, `FindSuperMethodsTool`.
-- For Rider: must use the proven defensive RD-proxy resolution chain documented in `CLAUDE.md`. Do not reimplement; reuse the helpers from `FindClassTool` / `OptimizedSymbolSearch`.
+- Internally batches calls to `TypeHierarchyTool` (supertypes → `class_inherits_from` / `class_implements_interface`), `FindSuperMethodsTool` (→ `method_overrides_method`), `CallHierarchyTool` (callees → `method_calls_method`), and `ReferencesSearch` / `executeReferenceProvider` with an enclosing-type walk (→ `class_references_class`).
+- For Rider: must use the proven defensive RD-proxy resolution chain documented in `CLAUDE.md` §4. Do not reimplement; reuse `CSharpSymbolResolver` (which delegates to `ClassResolver.findClassByName` + `PlatformFallbacks.findContainingClass`).
 - Symbol IDs that can't be resolved go to `unresolved_ids[]`, not errors — partial success is acceptable.
+- Pair with `unity_graph_snapshot` using `include_class_anchors=true` (Day 8.4) so the webview has stable `unity://csharp/T:...` node IDs to attach the response edges to.
+- The webview also routes through this tool via an in-process bridge handler (`unity_graph_code_edges` wire type) so a click-to-expand never goes over HTTP.
+
+**Known gaps (carry-forward, tracked for a follow-up release)**
+- `method_calls_method.metadata.call_sites[].kind` defaults to `'direct'` on both hosts. Rider's `CallElementData` doesn't surface dispatch kind, and Roslyn LSP doesn't expose it through `executeCallHierarchyProvider`. Tightening needs PSI/semantic-tokens inspection of each call expression.
+- Method IDs are minted as `M:<owner>.<name>` without a parameter list, because the intermediate data classes don't preserve signatures. Overload disambiguation falls through to first-match-by-name. Full `DocumentationCommentId` round-trip is a separate task.
+- Rider currently uses partial-DocId labels for method targets while VS Code uses LSP display names; clients correlating results across hosts should join on label rather than ID until ID generation converges.
 
 ---
 

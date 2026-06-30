@@ -36,6 +36,7 @@ object ToolNames {
     const val UNITY_GRAPH_NEIGHBORS = "unity_graph_neighbors"
     const val UNITY_GRAPH_IMPACT = "unity_graph_impact"
     const val UNITY_GRAPH_CONTEXT = "unity_graph_context"
+    const val UNITY_GRAPH_CODE_EDGES = "unity_graph_code_edges"
 
     const val GET_SYMBOL_BODY = "ide_get_symbol_body"
 }

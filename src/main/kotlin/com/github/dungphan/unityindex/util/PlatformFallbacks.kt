@@ -411,7 +411,7 @@ object PlatformFallbacks {
         )
     }
 
-    private fun classifyElementKind(element: PsiElement): String {
+    internal fun classifyElementKind(element: PsiElement): String {
         val className = element.javaClass.simpleName.lowercase()
         return when {
             className.contains("interface") -> "interface"
@@ -447,7 +447,7 @@ object PlatformFallbacks {
         return "unknown"
     }
 
-    private fun findContainingClass(element: PsiElement): PsiElement? {
+    internal fun findContainingClass(element: PsiElement): PsiElement? {
         var parent = element.parent
         while (parent != null && parent !is PsiFile) {
             val kind = classifyElementKind(parent)

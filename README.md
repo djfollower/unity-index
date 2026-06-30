@@ -66,6 +66,11 @@ once for the whole batch, and entries execute concurrently (default 8, max 16). 
 | `unity_get_api_usage` | Find all uses of a specific Unity API (e.g., Physics.Raycast) |
 | `unity_find_asset_references` | Find every prefab/scene/SO that references an asset by GUID |
 | `unity_graph_snapshot` | Full asset-domain graph (scripts/prefabs/scenes/SOs + edges) for the graph webview and agents |
+| `unity_graph_neighbors` | N-hop neighborhood of a node ID (focused subgraph query) |
+| `unity_graph_impact` | Reverse-reachable closure ("what breaks if I delete this") with classification |
+| `unity_graph_context` | Single node + 1-hop neighborhood flattened for LLM prompts |
+| `unity_graph_snapshot_delta` | Incremental snapshot updates against a prior `revision` (delta + reset paths) |
+| `unity_graph_code_edges` | Batch C# semantic edges (inheritance, calls, references) for up to 500 `unity://csharp/...` symbol IDs |
 
 ## Requirements
 

@@ -119,6 +119,11 @@ data class GraphSnapshotRequest(
     val path_globs: List<String>? = null,
     val include_orphans: Boolean? = null,
     val pagination: GraphPageRequest? = null,
+    /** Day 8.4 — when true, materialize one `class` node per
+     *  `script_declares_class` edge target so the UI has anchors for Day 8
+     *  code-edge expansion. Mirrors `SnapshotRequest.include_class_anchors`
+     *  in graph/core/src/snapshot-wire.ts. */
+    val include_class_anchors: Boolean? = null,
 )
 
 @Serializable
@@ -177,6 +182,34 @@ data class GraphSnapshotDeltaRequest(
     val exclude_kinds: List<NodeKind>? = null,
     val path_globs: List<String>? = null,
     val include_orphans: Boolean? = null,
+)
+
+// ---------------------------------------------------------------------------
+// Day 8 — unity_graph_code_edges. Mirrors graph/core/src/code-edges-wire.ts;
+// see that file for the canonical contract documentation. Both
+// implementations MUST emit the same field names so a single MCP client
+// config works against either host.
+// ---------------------------------------------------------------------------
+
+@Serializable
+data class CodeEdgesRequest(
+    val project_path: String? = null,
+    val request_id: String? = null,
+    /** 1..500 `unity://csharp/...` IDs. */
+    val symbol_ids: List<String> = emptyList(),
+    /** Filter — only return edges of these kinds. Omit/empty for all. */
+    val edge_kinds: List<EdgeKind>? = null,
+    /** When false, the response contains edges only. Default: true. */
+    val include_targets: Boolean? = null,
+)
+
+@Serializable
+data class CodeEdgesResponse(
+    val request_id: String? = null,
+    val generated_at: String,
+    val warnings: List<GraphWarning>? = null,
+    val snapshot: GraphSnapshot,
+    val unresolved_ids: List<String>? = null,
 )
 
 @Serializable

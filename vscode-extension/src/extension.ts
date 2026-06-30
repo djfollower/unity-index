@@ -48,6 +48,7 @@ import { UnityGraphSnapshotDeltaTool } from "./tools/unity/unityGraphSnapshotDel
 import { UnityGraphNeighborsTool } from "./tools/unity/unityGraphNeighborsTool";
 import { UnityGraphImpactTool } from "./tools/unity/unityGraphImpactTool";
 import { UnityGraphContextTool } from "./tools/unity/unityGraphContextTool";
+import { UnityGraphCodeEdgesTool } from "./tools/unity/unityGraphCodeEdgesTool";
 
 // Batch dispatcher
 import { BatchTool } from "./tools/batchTool";
@@ -107,6 +108,7 @@ function buildRegistry(): ToolRegistry {
   registry.register(new UnityGraphNeighborsTool());
   registry.register(new UnityGraphImpactTool());
   registry.register(new UnityGraphContextTool());
+  registry.register(new UnityGraphCodeEdgesTool());
   // Batch dispatcher must be registered last — it holds a reference to the
   // registry so it can dispatch entries to any other registered tool.
   registry.register(new BatchTool(registry));
