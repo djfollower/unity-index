@@ -38,6 +38,7 @@ object ToolNames {
     const val UNITY_GRAPH_CONTEXT = "unity_graph_context"
     const val UNITY_GRAPH_CODE_EDGES = "unity_graph_code_edges"
     const val UNITY_GRAPH_DIAGNOSTICS = "unity_graph_diagnostics"
+    const val UNITY_GRAPH_EXPORT = "unity_graph_export"
 
     const val GET_SYMBOL_BODY = "ide_get_symbol_body"
 }

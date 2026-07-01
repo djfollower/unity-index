@@ -71,6 +71,7 @@ once for the whole batch, and entries execute concurrently (default 8, max 16). 
 | `unity_graph_context` | Single node + 1-hop neighborhood flattened for LLM prompts |
 | `unity_graph_snapshot_delta` | Incremental snapshot updates against a prior `revision` (delta + reset paths) |
 | `unity_graph_code_edges` | Batch C# semantic edges (inheritance, calls, references) for up to 500 `unity://csharp/...` symbol IDs |
+| `unity_graph_export` | Self-contained JSON export (snapshot + producer meta) in the v1 `ExportDocument` envelope — same file the graph panel's JSON export button emits, re-loadable via "Open Graph from File…" |
 
 ## Requirements
 

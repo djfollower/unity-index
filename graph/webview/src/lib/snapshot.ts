@@ -28,7 +28,10 @@ export async function fetchSnapshot(
     bridge,
     SNAPSHOT_GRAPH_TYPE,
     req,
-    { timeoutMs: SNAPSHOT_TIMEOUT_MS, onProgress: options.onProgress },
+    {
+      timeoutMs: SNAPSHOT_TIMEOUT_MS,
+      ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+    },
   );
 }
 

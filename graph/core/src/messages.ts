@@ -189,3 +189,90 @@ export interface SetFilterStateRequest {
 export interface SetFilterStateResponse {
   saved: true;
 }
+
+// ---------------------------------------------------------------------------
+// Day 11 — saved views. The webview owns the live UI ("apply this view"); the
+// host is durable per-workspace/per-project storage. Round-trip:
+//   1. webview opens Views dropdown → `unity_graph_saved_views_list`
+//   2. user picks Save → `unity_graph_saved_views_save({ view })`, upsert by name
+//   3. user picks Delete → `unity_graph_saved_views_delete({ name })`
+// "Load" is client-side: pick a `SavedView` from the list response and let the
+// webview apply its filter/focus/camera state locally. The payload shape is
+// `SavedView` from ./export-wire.ts — kept there so `unity_graph_export`
+// serialises identical bytes without a second declaration.
+// ---------------------------------------------------------------------------
+
+export const SAVED_VIEWS_LIST_TYPE = 'unity_graph_saved_views_list' as const;
+export const SAVED_VIEWS_SAVE_TYPE = 'unity_graph_saved_views_save' as const;
+export const SAVED_VIEWS_DELETE_TYPE = 'unity_graph_saved_views_delete' as const;
+
+export interface SavedViewsListRequest {}
+
+export interface SavedViewsListResponse {
+  views: import('./export-wire.js').SavedView[];
+}
+
+export interface SavedViewsSaveRequest {
+  view: import('./export-wire.js').SavedView;
+}
+
+export interface SavedViewsSaveResponse {
+  saved: true;
+}
+
+export interface SavedViewsDeleteRequest {
+  name: string;
+}
+
+export interface SavedViewsDeleteResponse {
+  deleted: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Day 11 — save-file endpoint. Shared plumbing behind the PNG (Task 4), SVG
+// (Task 5), and JSON (Task 6) export buttons. Content is base64 so the wire
+// stays UTF-8 clean regardless of MIME. The host runs its native save dialog
+// against `defaultName`, then writes `contentBase64` decoded to bytes. No
+// implicit path resolution — the user's dialog choice is the path.
+//
+// Response reports `saved: false` when the user cancels (not an error).
+// Errors (permission denied, disk full, etc.) come back as thrown Error on
+// the bridge, letting the webview surface a stable message in its toaster.
+// ---------------------------------------------------------------------------
+
+export const SAVE_FILE_TYPE = 'unity_graph_save_file' as const;
+
+export type SaveFileKind = 'png' | 'svg' | 'json';
+
+export interface SaveFileRequest {
+  /** Suggested filename (with extension) shown in the host save dialog.
+   *  Callers pass e.g. `unity-graph.png`; the user may rename before saving. */
+  defaultName: string;
+  /** Content type. Used to pick the save-dialog filter and to sanity-check
+   *  the extension the user picks (best-effort, not enforced). */
+  kind: SaveFileKind;
+  /** Payload, base64-encoded. Binary formats (PNG) encode raw bytes; text
+   *  formats (SVG, JSON) encode UTF-8 bytes. */
+  contentBase64: string;
+}
+
+export interface SaveFileResponse {
+  /** True when a file was written. False when the user cancelled the
+   *  dialog — that's an expected outcome, not an error. */
+  saved: boolean;
+  /** Absolute path of the written file. Omitted when `saved: false`. */
+  path?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Day 11 Task 8 — offline mode. Fired by the host as an EVENT envelope
+// (not a request) to hand the webview a pre-parsed ExportDocument. The
+// webview enters read-only mode: live delta subscription pauses,
+// click-through actions gate off, a banner names the source.
+// ---------------------------------------------------------------------------
+
+export const SNAPSHOT_LOAD_STATIC_TYPE = 'unity_graph_snapshot_load_static' as const;
+
+export interface SnapshotLoadStaticEvent {
+  document: import('./export-wire.js').ExportDocument;
+}

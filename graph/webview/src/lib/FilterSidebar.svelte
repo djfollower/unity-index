@@ -11,6 +11,15 @@
   import { diagnosticsStore } from './diagnostics.svelte';
   import { nodeStyleFor } from './style';
   import Presets from './Presets.svelte';
+  import SavedViews from './SavedViews.svelte';
+  import type { HostBridge, SavedView } from '@unity-index/graph-core';
+
+  interface CapturedView {
+    filter: SavedView['filter'];
+    focusStack: SavedView['focusStack'];
+    camera: SavedView['camera'];
+    positions?: SavedView['positions'];
+  }
 
   interface Props {
     /** Map of kind → node count, derived from the current Graphology graph
@@ -23,6 +32,16 @@
      *  preset buttons and shows a loading label. */
     presetBusy: boolean;
     onShowMonoBehaviours: () => void;
+    /** Day 11 — live host bridge, threaded through so the SavedViews dropdown
+     *  can persist without reaching for a module singleton. Null in
+     *  standalone dev mode. */
+    bridge: HostBridge | null;
+    /** Day 11 — snapshot the live filter / focus / camera as a SavedView
+     *  payload. App.svelte owns the sigma instance, so it captures. */
+    captureCurrentView: () => CapturedView;
+    /** Day 11 — apply a stored view to the live graph (filter reducers,
+     *  focus stack, camera). App.svelte owns the setters, so it applies. */
+    onLoadSavedView: (view: SavedView) => void;
   }
 
   let {
@@ -30,6 +49,9 @@
     standalone,
     presetBusy,
     onShowMonoBehaviours,
+    bridge,
+    captureCurrentView,
+    onLoadSavedView,
   }: Props = $props();
   let collapsed = $state(false);
 
@@ -88,6 +110,12 @@
         </div>
       </header>
       <Presets {standalone} busy={presetBusy} {onShowMonoBehaviours} />
+      <SavedViews
+        {standalone}
+        {bridge}
+        captureCurrent={captureCurrentView}
+        onLoad={onLoadSavedView}
+      />
       <!-- Day 10 — diagnostics overlay controls. Mutually-coupled toggles:
            the umbrella "enabled" switch lights up badges and unlocks the
            two dependent modes; turning heatmap/errors-only on auto-enables

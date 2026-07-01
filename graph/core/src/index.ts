@@ -26,6 +26,16 @@ export type {
   GetFilterStateResponse,
   SetFilterStateRequest,
   SetFilterStateResponse,
+  SavedViewsListRequest,
+  SavedViewsListResponse,
+  SavedViewsSaveRequest,
+  SavedViewsSaveResponse,
+  SavedViewsDeleteRequest,
+  SavedViewsDeleteResponse,
+  SaveFileKind,
+  SaveFileRequest,
+  SaveFileResponse,
+  SnapshotLoadStaticEvent,
 } from './messages.js';
 export {
   HELLO_GRAPH_TYPE,
@@ -41,6 +51,11 @@ export {
   CONTEXT_GRAPH_TYPE,
   CODE_EDGES_GRAPH_TYPE,
   DIAGNOSTICS_GRAPH_TYPE,
+  SAVED_VIEWS_LIST_TYPE,
+  SAVED_VIEWS_SAVE_TYPE,
+  SAVED_VIEWS_DELETE_TYPE,
+  SAVE_FILE_TYPE,
+  SNAPSHOT_LOAD_STATIC_TYPE,
 } from './messages.js';
 
 export type {
@@ -148,6 +163,28 @@ export type {
 
 export type { DiffSnapshotsOptions } from './snapshot-diff.js';
 export { diffSnapshots, isEmptyDelta } from './snapshot-diff.js';
+
+export type {
+  ExportCodeEdges,
+  ExportDocument,
+  ExportMeta,
+  ExportProducer,
+  ExportValidationErrorKind,
+  SavedView,
+  SavedViewCamera,
+  SavedViewFilter,
+  SavedViewFocusFrame,
+  SavedViewPositions,
+} from './export-wire.js';
+export {
+  EXPORT_SCHEMA_MAJOR,
+  EXPORT_SCHEMA_MINOR,
+  EXPORT_SCHEMA_VERSION,
+  ExportValidationError,
+  assertCompatibleExport,
+  createExportEnvelope,
+  parseSchemaVersion,
+} from './export-wire.js';
 export {
   edgeKey,
   isApplicableDelta,

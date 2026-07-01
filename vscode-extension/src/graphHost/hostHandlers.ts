@@ -26,6 +26,14 @@ import type {
   ProgressPayload,
   RevealInExplorerRequest,
   RevealInExplorerResponse,
+  SavedView,
+  SavedViewsDeleteRequest,
+  SavedViewsDeleteResponse,
+  SavedViewsListResponse,
+  SavedViewsSaveRequest,
+  SavedViewsSaveResponse,
+  SaveFileRequest,
+  SaveFileResponse,
   SetFilterStateRequest,
   SetFilterStateResponse,
   SnapshotRequest,
@@ -55,10 +63,19 @@ const CODE_EDGES_TYPE = "unity_graph_code_edges";
 // Day 10 — diagnostics overlay (badges + heatmap + errors-only filter).
 // Mirror of graph/core DIAGNOSTICS_GRAPH_TYPE.
 const DIAGNOSTICS_TYPE = "unity_graph_diagnostics";
+// Day 11 — saved views. Mirrors of graph/core SAVED_VIEWS_*_TYPE.
+const SAVED_VIEWS_LIST_TYPE = "unity_graph_saved_views_list";
+const SAVED_VIEWS_SAVE_TYPE = "unity_graph_saved_views_save";
+const SAVED_VIEWS_DELETE_TYPE = "unity_graph_saved_views_delete";
+// Day 11 — shared save-file endpoint for PNG / SVG / JSON exports.
+const SAVE_FILE_TYPE = "unity_graph_save_file";
 
 // workspaceState key. Scoped per-workspace so each Unity project keeps its
 // own filter view (matches the "persists per workspace" Day 5 requirement).
 const FILTER_STATE_STORAGE_KEY = "unityIndex.graph.filterState";
+// Day 11 — one workspaceState entry holds the whole list; count is bounded
+// by UX (user-typed names) so we don't shard.
+const SAVED_VIEWS_STORAGE_KEY = "unityIndex.graph.savedViews";
 
 export interface HostHandlerContext {
   /**
@@ -125,6 +142,18 @@ export async function dispatchRequest(
     }
     case DIAGNOSTICS_TYPE: {
       return handleDiagnostics(payload);
+    }
+    case SAVED_VIEWS_LIST_TYPE: {
+      return handleListSavedViews(ctx);
+    }
+    case SAVED_VIEWS_SAVE_TYPE: {
+      return handleSaveSavedView(payload, ctx);
+    }
+    case SAVED_VIEWS_DELETE_TYPE: {
+      return handleDeleteSavedView(payload, ctx);
+    }
+    case SAVE_FILE_TYPE: {
+      return handleSaveFile(payload);
     }
     default:
       throw new Error(`unity_graph: unknown request type '${type}'`);
@@ -450,6 +479,125 @@ async function handleFindUsages(payload: unknown): Promise<FindUsagesResponse> {
     // themselves. We don't throw so the user still sees the file land.
   }
   return { invoked: true };
+}
+
+// ---------------------------------------------------------------------------
+// Day 11 — saved views persistence
+// ---------------------------------------------------------------------------
+//
+// One workspaceState entry holds the whole list. Reads are cheap; writes are
+// full-list replace. The count is bounded by how many views a user actually
+// types names for — sharding would be premature.
+//
+// Wire shape mirrors `SavedView` in graph-core's export-wire.ts. We validate
+// structurally on read and drop malformed entries rather than reject the whole
+// list — the same principle as filter-state coercion above.
+
+function isSavedViewLike(v: unknown): v is SavedView {
+  if (!v || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.name === "string" &&
+    o.name.length > 0 &&
+    typeof o.createdAt === "string" &&
+    typeof o.filter === "object" &&
+    o.filter !== null &&
+    Array.isArray(o.focusStack) &&
+    typeof o.camera === "object" &&
+    o.camera !== null
+  );
+}
+
+function coerceSavedViewList(raw: unknown): SavedView[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(isSavedViewLike);
+}
+
+function handleListSavedViews(ctx: HostHandlerContext): SavedViewsListResponse {
+  const raw = ctx.workspaceState.get<unknown>(SAVED_VIEWS_STORAGE_KEY);
+  return { views: coerceSavedViewList(raw) };
+}
+
+async function handleSaveSavedView(
+  payload: unknown,
+  ctx: HostHandlerContext,
+): Promise<SavedViewsSaveResponse> {
+  const req = (payload ?? {}) as Partial<SavedViewsSaveRequest>;
+  if (!isSavedViewLike(req.view)) {
+    throw new Error("invalid_saved_view");
+  }
+  const current = coerceSavedViewList(
+    ctx.workspaceState.get<unknown>(SAVED_VIEWS_STORAGE_KEY),
+  );
+  const next = [req.view, ...current.filter((v) => v.name !== req.view!.name)];
+  await ctx.workspaceState.update(SAVED_VIEWS_STORAGE_KEY, next);
+  return { saved: true };
+}
+
+async function handleDeleteSavedView(
+  payload: unknown,
+  ctx: HostHandlerContext,
+): Promise<SavedViewsDeleteResponse> {
+  const req = (payload ?? {}) as Partial<SavedViewsDeleteRequest>;
+  if (typeof req.name !== "string" || req.name.length === 0) {
+    return { deleted: false };
+  }
+  const current = coerceSavedViewList(
+    ctx.workspaceState.get<unknown>(SAVED_VIEWS_STORAGE_KEY),
+  );
+  const next = current.filter((v) => v.name !== req.name);
+  if (next.length === current.length) return { deleted: false };
+  await ctx.workspaceState.update(SAVED_VIEWS_STORAGE_KEY, next);
+  return { deleted: true };
+}
+
+// ---------------------------------------------------------------------------
+// Day 11 — save-file endpoint (PNG / SVG / JSON exports)
+// ---------------------------------------------------------------------------
+//
+// Runs the platform save dialog against a default name, decodes the base64
+// payload to bytes, and writes it via workspace.fs. No implicit path
+// resolution — the dialog choice is authoritative, so exports outside the
+// workspace are allowed (a user exporting a PNG to Desktop is fine).
+
+const SAVE_FILE_FILTERS: Record<
+  SaveFileRequest["kind"],
+  Record<string, string[]>
+> = {
+  png: { "PNG image": ["png"] },
+  svg: { "SVG image": ["svg"] },
+  json: { "JSON document": ["json"] },
+};
+
+async function handleSaveFile(payload: unknown): Promise<SaveFileResponse> {
+  const req = (payload ?? {}) as Partial<SaveFileRequest>;
+  if (typeof req.defaultName !== "string" || req.defaultName.length === 0) {
+    throw new Error("invalid_save_request");
+  }
+  if (req.kind !== "png" && req.kind !== "svg" && req.kind !== "json") {
+    throw new Error("invalid_save_request");
+  }
+  if (typeof req.contentBase64 !== "string") {
+    throw new Error("invalid_save_request");
+  }
+  const uri = await vscode.window.showSaveDialog({
+    // Seed the dialog inside the first workspace folder when we have one so
+    // the user doesn't start from the last global save location — which for
+    // headless CI could be nonsense.
+    defaultUri: seedSaveUri(req.defaultName),
+    filters: SAVE_FILE_FILTERS[req.kind],
+    saveLabel: "Export",
+  });
+  if (!uri) return { saved: false };
+  const bytes = Buffer.from(req.contentBase64, "base64");
+  await vscode.workspace.fs.writeFile(uri, bytes);
+  return { saved: true, path: uri.fsPath };
+}
+
+function seedSaveUri(defaultName: string): vscode.Uri | undefined {
+  const first = vscode.workspace.workspaceFolders?.[0];
+  if (!first) return undefined;
+  return vscode.Uri.joinPath(first.uri, defaultName);
 }
 
 async function handleRevealInExplorer(

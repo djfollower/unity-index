@@ -51,4 +51,14 @@ object GraphWireTypes {
     // also matches ToolNames.UNITY_GRAPH_DIAGNOSTICS so the same identifier
     // flows through both the bridge and HTTP paths.
     const val DIAGNOSTICS = "unity_graph_diagnostics"
+
+    // Day 11 — saved views. Mirrors graph/core/src/messages.ts
+    // SAVED_VIEWS_*_TYPE. Storage lives in GraphSavedViewsService.
+    const val SAVED_VIEWS_LIST = "unity_graph_saved_views_list"
+    const val SAVED_VIEWS_SAVE = "unity_graph_saved_views_save"
+    const val SAVED_VIEWS_DELETE = "unity_graph_saved_views_delete"
+
+    // Day 11 — shared PNG / SVG / JSON export endpoint. Mirror of graph/core/
+    // src/messages.ts SAVE_FILE_TYPE.
+    const val SAVE_FILE = "unity_graph_save_file"
 }

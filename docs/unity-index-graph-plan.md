@@ -102,8 +102,9 @@ graph/
 - `unity_graph_context` — node + 1-hop neighborhood + metadata, optimized for agent prompts.
 - `unity_graph_query` — DSL query against the graph (Day 12).
 - `unity_graph_code_edges` — batch C# edge lookup for N symbols (Phase 2 batch API).
+- `unity_graph_export` — self-contained JSON export bundling snapshot + producer meta in the v1 `ExportDocument` envelope (Day 11).
 
-Lock input/output schemas, error envelopes, and which tools are Phase 1 vs Phase 2. Day 2 implements `snapshot`, Day 6 implements `impact` / `context` / `neighbors`, Day 8 adds `code_edges`, Day 12 adds `query`.
+Lock input/output schemas, error envelopes, and which tools are Phase 1 vs Phase 2. Day 2 implements `snapshot`, Day 6 implements `impact` / `context` / `neighbors`, Day 8 adds `code_edges`, Day 11 adds `export`, Day 12 adds `query`.
 
 ---
 
@@ -242,12 +243,12 @@ Lock input/output schemas, error envelopes, and which tools are Phase 1 vs Phase
 
 ---
 
-## Day 11 — Saved views + export
+## Day 11 — Saved views + export ✅
 
-- Bookmark current filter/focus/layout as a named view.
-- Export PNG / SVG of current viewport.
-- Export full graph as JSON.
-- Import JSON for offline browsing or sharing in PR reviews.
+- Bookmark current filter/focus/layout as a named view. Persisted per-workspace (VS Code `workspaceState` / Rider `@State` service) via the new `unity_graph_saved_views_{list,save,delete}` bridge endpoints. UI: FilterSidebar → "Saved views" dropdown.
+- Export PNG / SVG of current viewport. Shared `unity_graph_save_file` bridge endpoint drives the host save dialog (VS Code `showSaveDialog` / Rider `FileChooserFactory`). PNG composites Sigma's per-layer canvases; SVG is hand-rolled from graphology + `sigma.graphToViewport`.
+- Export full graph as JSON — versioned `ExportDocument` (schema v1, `graph/core/src/export-wire.ts`) with snapshot + producer meta and (from the webview button) saved views. Also available server-side as the `unity_graph_export` MCP tool.
+- Import JSON for offline browsing or sharing in PR reviews. New commands: VS Code "Unity Index: Open Graph from File…" and Rider "Unity Index: Open Graph from File…" (Tools menu). Webview enters read-only mode: delta polling pauses, click-through-to-IDE actions gate off, a top banner names the source project + export timestamp. Version-major mismatch is rejected loudly.
 
 **Dependency:** Days 3, 5, 6.
 

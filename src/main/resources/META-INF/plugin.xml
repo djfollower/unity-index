@@ -61,4 +61,15 @@ instead of raw text grep, dramatically reducing token usage and improving AI age
     <extensionPoints>
         <extensionPoint name="mcpTool" interface="com.github.dungphan.unityindex.tools.McpTool" dynamic="true"/>
     </extensionPoints>
+
+    <actions>
+        <!-- Day 11 Task 8 — offline graph browsing. Prompts for a JSON export and
+             hands it to the Unity Index Graph tool window. -->
+        <action id="UnityIndex.OpenGraphFromFile"
+                class="com.github.dungphan.unityindex.graph.OpenGraphFromFileAction"
+                text="Unity Index: Open Graph from File…"
+                description="Load a previously exported unity-index graph JSON for offline browsing.">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>

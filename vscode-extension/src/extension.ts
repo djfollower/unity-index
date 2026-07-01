@@ -50,12 +50,14 @@ import { UnityGraphImpactTool } from "./tools/unity/unityGraphImpactTool";
 import { UnityGraphContextTool } from "./tools/unity/unityGraphContextTool";
 import { UnityGraphCodeEdgesTool } from "./tools/unity/unityGraphCodeEdgesTool";
 import { UnityGraphDiagnosticsTool } from "./tools/unity/unityGraphDiagnosticsTool";
+import { UnityGraphExportTool } from "./tools/unity/unityGraphExportTool";
 
 // Batch dispatcher
 import { BatchTool } from "./tools/batchTool";
 
 // Graph webview
 import { GraphPanel } from "./graphHost/graphPanel";
+import { assertCompatibleExport, ExportValidationError } from "@unity-index/graph-core";
 
 interface RunningServer {
   http: HttpServer;
@@ -111,6 +113,7 @@ function buildRegistry(): ToolRegistry {
   registry.register(new UnityGraphContextTool());
   registry.register(new UnityGraphCodeEdgesTool());
   registry.register(new UnityGraphDiagnosticsTool());
+  registry.register(new UnityGraphExportTool());
   // Batch dispatcher must be registered last — it holds a reference to the
   // registry so it can dispatch entries to any other registered tool.
   registry.register(new BatchTool(registry));
@@ -226,12 +229,69 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         workspaceState: context.workspaceState,
       });
     }),
+    vscode.commands.registerCommand("unityIndex.openGraphFromFile", async () => {
+      await openGraphFromFile(context);
+    }),
   );
 
   const config = vscode.workspace.getConfiguration("unityIndex.mcp");
   if (config.get<boolean>("autoStart", true)) {
     await startServer();
   }
+}
+
+// Day 11 Task 8 — "Open Graph from File…" command. Prompts for a v1
+// ExportDocument JSON, validates the major version, and hands it to the
+// graph panel for offline browsing. Refuses incompatible majors with a
+// clear error so a future v2 dump can't corrupt the webview state.
+async function openGraphFromFile(context: vscode.ExtensionContext): Promise<void> {
+  const picked = await vscode.window.showOpenDialog({
+    canSelectMany: false,
+    filters: { "Unity graph export": ["json"] },
+    openLabel: "Open graph",
+  });
+  const uri = picked?.[0];
+  if (!uri) return;
+  let raw: string;
+  try {
+    const bytes = await vscode.workspace.fs.readFile(uri);
+    raw = Buffer.from(bytes).toString("utf8");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    void vscode.window.showErrorMessage(`Could not read ${uri.fsPath}: ${msg}`);
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    void vscode.window.showErrorMessage(`Not a valid JSON file: ${msg}`);
+    return;
+  }
+  let doc;
+  try {
+    doc = assertCompatibleExport(parsed);
+  } catch (e) {
+    const isValidation = e instanceof ExportValidationError;
+    const msg = isValidation
+      ? `Unity graph import failed (${e.kind}): ${e.message}`
+      : e instanceof Error
+        ? e.message
+        : String(e);
+    void vscode.window.showErrorMessage(msg);
+    return;
+  }
+  GraphPanel.loadStatic(
+    context.extensionUri,
+    log,
+    {
+      getAssetIndex: () => running?.assetIndex,
+      getGraphCache: () => running?.graphCache,
+      workspaceState: context.workspaceState,
+    },
+    doc,
+  );
 }
 
 export async function deactivate(): Promise<void> {

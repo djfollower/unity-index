@@ -31,6 +31,7 @@ import com.github.dungphan.unityindex.tools.unity.UnityGraphImpactTool
 import com.github.dungphan.unityindex.tools.unity.UnityGraphNeighborsTool
 import com.github.dungphan.unityindex.tools.unity.UnityGraphSnapshotDeltaTool
 import com.github.dungphan.unityindex.tools.unity.UnityGraphSnapshotTool
+import com.github.dungphan.unityindex.tools.unity.UnityGraphExportTool
 import com.intellij.openapi.diagnostic.logger
 import java.util.concurrent.ConcurrentHashMap
 
@@ -141,6 +142,7 @@ class ToolRegistry {
         register(UnityGraphContextTool())
         register(UnityGraphCodeEdgesTool())
         register(UnityGraphDiagnosticsTool())
+        register(UnityGraphExportTool())
 
         LOG.info("Registered Unity-specific tools")
     }

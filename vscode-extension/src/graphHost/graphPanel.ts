@@ -3,11 +3,15 @@ import * as vscode from "vscode";
 
 import type {
   BridgeEnvelope,
+  EventEnvelope,
+  ExportDocument,
   ProgressEnvelope,
   ProgressPayload,
   RequestEnvelope,
   ResponseEnvelope,
+  SnapshotLoadStaticEvent,
 } from "@unity-index/graph-core";
+import { SNAPSHOT_LOAD_STATIC_TYPE } from "@unity-index/graph-core";
 
 import { transformHtml } from "./htmlTransformer";
 import { dispatchRequest, HostHandlerContext } from "./hostHandlers";
@@ -59,6 +63,33 @@ export class GraphPanel {
       },
     );
     GraphPanel.current = new GraphPanel(panel, extensionUri, log, hostCtx);
+  }
+
+  /** Day 11 Task 8 — hand the webview a pre-parsed ExportDocument to view
+   *  offline. Called by the "Open Graph from File…" command. Reveals the
+   *  panel first so users don't have to click twice, then fires the event. */
+  static loadStatic(
+    extensionUri: vscode.Uri,
+    log: (msg: string) => void,
+    hostCtx: HostHandlerContext,
+    document: ExportDocument,
+  ): void {
+    GraphPanel.reveal(extensionUri, log, hostCtx);
+    const panel = GraphPanel.current;
+    if (!panel) return;
+    const payload: SnapshotLoadStaticEvent = { document };
+    const env: EventEnvelope = {
+      kind: "event",
+      type: SNAPSHOT_LOAD_STATIC_TYPE,
+      payload,
+    };
+    // Race: the webview may not have mounted its message listener yet on a
+    // cold reveal. Retry once after a beat so the first-import UX doesn't
+    // require the user to click "Open from file" twice.
+    panel.panel.webview.postMessage(env);
+    setTimeout(() => {
+      panel.panel.webview.postMessage(env);
+    }, 400);
   }
 
   private setHtml(): void {

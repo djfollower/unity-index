@@ -46,8 +46,27 @@ class GraphHostBridge(
         }
     }
 
+    init {
+        if (project != null) GraphBridgeRegistry.get(project).register(this)
+    }
+
     override fun dispose() {
+        if (project != null) GraphBridgeRegistry.get(project).unregister(this)
         query.dispose()
+    }
+
+    /** Day 11 Task 8 — fire a host-originated event to the webview. Used by
+     *  the "Open Graph from File…" action to hand over a parsed
+     *  ExportDocument for offline browsing. Event envelopes have no id and
+     *  don't expect a response. */
+    fun postEvent(type: String, payload: JsonElement) {
+        val env = BridgeEnvelope(
+            kind = "event",
+            id = null,
+            type = type,
+            payload = payload,
+        )
+        sendToWebview(env)
     }
 
     // Returns the HTML with a <script> stub injected into <head> that creates

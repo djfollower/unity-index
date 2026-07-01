@@ -57,6 +57,10 @@ object GraphHostHandlers {
             GraphWireTypes.SET_FILTER_STATE -> handleSetFilterState(payload, project)
             GraphWireTypes.CODE_EDGES -> handleCodeEdges(payload, project)
             GraphWireTypes.DIAGNOSTICS -> handleDiagnostics(payload, project)
+            GraphWireTypes.SAVED_VIEWS_LIST -> handleListSavedViews(project)
+            GraphWireTypes.SAVED_VIEWS_SAVE -> handleSaveSavedView(payload, project)
+            GraphWireTypes.SAVED_VIEWS_DELETE -> handleDeleteSavedView(payload, project)
+            GraphWireTypes.SAVE_FILE -> handleSaveFile(payload, project)
             else -> throw IllegalArgumentException("unity_graph: unknown request type '$type'")
         }
     }
@@ -291,6 +295,98 @@ object GraphHostHandlers {
             coerceDomain(req.state.domain),
         )
         return buildJsonObject { put("saved", JsonPrimitive(true)) }
+    }
+
+    // -----------------------------------------------------------------------
+    // Day 11 — saved views
+    // -----------------------------------------------------------------------
+    //
+    // Payloads are pass-through JSON: the webview owns the `SavedView` shape
+    // (see graph/core/src/export-wire.ts), and this handler just guards on
+    // `name` being present + non-empty. Storage keeps entries as raw JSON
+    // strings so future field additions don't require a Kotlin serializer
+    // bump.
+
+    private fun handleListSavedViews(project: Project?): JsonElement {
+        project ?: throw IllegalStateException("no_project_open")
+        val views = GraphSavedViewsService.get(project).list()
+        return buildJsonObject {
+            put("views", kotlinx.serialization.json.JsonArray(views))
+        }
+    }
+
+    private fun handleSaveSavedView(payload: JsonElement?, project: Project?): JsonElement {
+        project ?: throw IllegalStateException("no_project_open")
+        val obj = payload as? JsonObject
+            ?: throw IllegalArgumentException("invalid_saved_view")
+        val view = obj["view"] as? JsonObject
+            ?: throw IllegalArgumentException("invalid_saved_view")
+        val name = (view["name"] as? JsonPrimitive)?.contentOrNull
+        if (name.isNullOrEmpty()) throw IllegalArgumentException("invalid_saved_view")
+        GraphSavedViewsService.get(project).upsert(view)
+        return buildJsonObject { put("saved", JsonPrimitive(true)) }
+    }
+
+    private fun handleDeleteSavedView(payload: JsonElement?, project: Project?): JsonElement {
+        project ?: throw IllegalStateException("no_project_open")
+        val name = (payload as? JsonObject)
+            ?.get("name")
+            ?.let { it as? JsonPrimitive }
+            ?.contentOrNull
+        if (name.isNullOrEmpty()) {
+            return buildJsonObject { put("deleted", JsonPrimitive(false)) }
+        }
+        val removed = GraphSavedViewsService.get(project).delete(name)
+        return buildJsonObject { put("deleted", JsonPrimitive(removed)) }
+    }
+
+    // -----------------------------------------------------------------------
+    // Day 11 — save-file (PNG / SVG / JSON exports)
+    // -----------------------------------------------------------------------
+    //
+    // Runs Rider's native save dialog, decodes base64 to bytes, writes with
+    // NIO. All heavy lifting stays off the EDT — only the dialog is invoked
+    // on the UI thread. `saved: false` on user cancel is not an error.
+
+    @Serializable
+    private data class SaveFileWire(
+        val defaultName: String? = null,
+        val kind: String? = null,
+        val contentBase64: String? = null,
+    )
+
+    private fun handleSaveFile(payload: JsonElement?, project: Project?): JsonElement {
+        project ?: throw IllegalStateException("no_project_open")
+        val req = decodeOrThrow(payload, SaveFileWire.serializer(), "invalid_save_request")
+        val defaultName = req.defaultName?.takeIf { it.isNotEmpty() }
+            ?: throw IllegalArgumentException("invalid_save_request")
+        val kind = req.kind?.takeIf { it == "png" || it == "svg" || it == "json" }
+            ?: throw IllegalArgumentException("invalid_save_request")
+        val contentBase64 = req.contentBase64
+            ?: throw IllegalArgumentException("invalid_save_request")
+
+        val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
+            "Export Graph",
+            "Choose a location to save the exported ${kind.uppercase()} file",
+            kind,
+        )
+        val holder = arrayOfNulls<java.io.File>(1)
+        ApplicationManager.getApplication().invokeAndWait {
+            val factory = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
+            val dialog = factory.createSaveFileDialog(descriptor, project)
+            val baseDir = project.basePath?.let { LocalFileSystem.getInstance().findFileByPath(it) }
+            val chosen = dialog.save(baseDir, defaultName) ?: return@invokeAndWait
+            holder[0] = chosen.file
+        }
+        val target = holder[0]
+            ?: return buildJsonObject { put("saved", JsonPrimitive(false)) }
+
+        val bytes = java.util.Base64.getDecoder().decode(contentBase64)
+        java.nio.file.Files.write(target.toPath(), bytes)
+        return buildJsonObject {
+            put("saved", JsonPrimitive(true))
+            put("path", JsonPrimitive(target.absolutePath))
+        }
     }
 
     private fun <T> decodeOrThrow(

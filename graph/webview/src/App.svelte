@@ -55,6 +55,15 @@
     reconcileHiddenKinds,
   } from './lib/filter';
   import { getFilterState, setFilterState } from './lib/filterSync';
+  import { savedViewsStore } from './lib/savedViewsStore.svelte';
+  import type { SavedView } from '@unity-index/graph-core';
+  import ExportBar from './lib/ExportBar.svelte';
+  import { renderViewportPng } from './lib/exportImage';
+  import { renderViewportSvg } from './lib/exportSvg';
+  import { bytesToBase64, saveFile, stringToBase64 } from './lib/saveFileSync';
+  import { assembleExportDocument } from './lib/exportDocument';
+  import { SNAPSHOT_LOAD_STATIC_TYPE } from '@unity-index/graph-core';
+  import type { ExportDocument, SnapshotLoadStaticEvent } from '@unity-index/graph-core';
   import Breadcrumb from './lib/Breadcrumb.svelte';
   import type { ImpactClassification } from '@unity-index/graph-core';
   import {
@@ -78,6 +87,12 @@
   // never became a tracked dep and later mutations didn't re-run the effect.
   let lastSnapshot: SnapshotResponse | null = $state(null);
   let bridgeRef: ReturnType<typeof pickBridge> | null = null;
+  // Day 11 Task 9 — offline mode. Set when the extension hands the panel a
+  // pre-parsed ExportDocument via `snapshot/load-static`. In this mode:
+  //   • delta polling pauses (no host to poll)
+  //   • click-through actions gate off (source project may not be open)
+  //   • a banner names the source project + export timestamp
+  let offlineDoc: ExportDocument | null = $state(null);
   // Mirror of the active Graphology graph, exposed reactively so the
   // SelectionPanel can read node attrs + neighbor degrees without reaching
   // into Sigma. Set in renderSnapshot / renderPlaceholderGraph, cleared on
@@ -816,6 +831,16 @@
 
   onMount(async () => {
     bridgeRef = pickBridge();
+    // Day 11 Task 9 — subscribe to host-originated events before loading so
+    // an "open from file" event delivered mid-load is not dropped.
+    const off = bridgeRef.bridge.onFromHost((env) => {
+      if (env.kind !== 'event') return;
+      if (env.type !== SNAPSHOT_LOAD_STATIC_TYPE) return;
+      const payload = env.payload as SnapshotLoadStaticEvent | undefined;
+      if (!payload?.document) return;
+      enterOfflineMode(payload.document);
+    });
+    unsubscribeEvents = off;
     if (bridgeRef.host === 'standalone') {
       viewState = 'ready';
       renderPlaceholderGraph('standalone (no host) — 3 nodes hardcoded');
@@ -823,6 +848,43 @@
     }
     await loadSnapshot();
   });
+
+  let unsubscribeEvents: (() => void) | null = null;
+
+  // Day 11 Task 9 — hand the webview a pre-parsed export document. Rebuilds
+  // the graph from the embedded snapshot, pauses live subscriptions, and
+  // records the doc so the banner + gating can react.
+  function enterOfflineMode(doc: ExportDocument): void {
+    stopDeltaPolling();
+    offlineDoc = doc;
+    // Synthesise a SnapshotResponse-shaped object so downstream rendering
+    // (renderSnapshot, focus effect) can treat it identically to a live
+    // fetch result. `revision: null` at currentRevision suppresses delta
+    // polling regardless of caller order.
+    const synthetic: SnapshotResponse = {
+      snapshot: doc.snapshot,
+      generated_at: doc.snapshot.generated_at,
+    };
+    expandedCodeAnchors = new Set();
+    codeEdgeInflight.clear();
+    lastSnapshot = synthetic;
+    currentRevision = null;
+    resetFocus();
+    if (doc.snapshot.nodes.length === 0) {
+      viewState = 'empty';
+      status = 'imported graph has no nodes';
+      return;
+    }
+    viewState = 'ready';
+    renderSnapshot(synthetic);
+    status = `viewing imported graph: ${doc.meta?.sourceProject ?? 'unknown project'}`;
+    // Rehydrate saved views from the imported document, if any. These are
+    // in-memory only — no bridge round-trip persists them to the current
+    // workspace state.
+    if (doc.savedViews && doc.savedViews.length > 0) {
+      savedViewsStore.views = [...doc.savedViews];
+    }
+  }
 
   // Day 6 Task 7/8: recompute focus visibility whenever the stack or snapshot
   // changes. Pure local traversal — no bridge round-trip. We DO NOT re-run
@@ -934,6 +996,8 @@
   });
 
   onDestroy(() => {
+    unsubscribeEvents?.();
+    unsubscribeEvents = null;
     stopDeltaPolling();
     layoutSupervisor?.kill();
     layoutSupervisor = null;
@@ -976,6 +1040,13 @@
     } finally {
       hydrated = true;
     }
+    // Day 11 — fire-and-forget saved views hydrate. Independent of filter
+    // state; store surfaces its own error if the round-trip fails. The
+    // early-return above already narrowed bridgeRef to a non-standalone
+    // bridge, so this is safe.
+    if (bridgeRef) {
+      void savedViewsStore.hydrate(bridgeRef.bridge);
+    }
   }
 
   // Day 5 Task 7: debounced persistence. Bumps on every store mutation
@@ -1008,6 +1079,13 @@
   // access stays in the webview); the rest hop through the host bridge.
   async function dispatchMenuAction(action: ActionId, nodeId: string): Promise<void> {
     if (!currentGraph || !currentGraph.hasNode(nodeId)) return;
+    // Day 11 Task 9 — offline mode: click-through-to-IDE requires the
+    // source project to be open in this host, which we can't assume.
+    // Copy actions (GUID) and local focus (neighbors / impact) still work.
+    if (offlineDoc && (action === 'open_file' || action === 'find_usages' || action === 'reveal_in_explorer')) {
+      status = 'offline mode: click-through actions disabled (imported graph)';
+      return;
+    }
     const attrs = currentGraph.getNodeAttributes(nodeId) as Record<string, unknown>;
     const filePath = typeof attrs.path === 'string' ? attrs.path : undefined;
     const guid = typeof attrs.guid === 'string' ? attrs.guid : undefined;
@@ -1069,6 +1147,141 @@
         await expandCodeEdgesFor(nodeId);
         return;
       }
+    }
+  }
+
+  // Day 11 — snapshot current filter / focus / camera as a SavedView payload.
+  // Pure read from the live stores + sigma; leaves `positions` out because
+  // saving the whole layout at bookmark time balloons the wire cost for the
+  // common case (users mostly want to remember filters, not layouts).
+  function captureCurrentView(): {
+    filter: SavedView['filter'];
+    focusStack: SavedView['focusStack'];
+    camera: SavedView['camera'];
+    positions?: SavedView['positions'];
+  } {
+    const filter: SavedView['filter'] = {
+      hiddenKinds: Array.from(filterStore.hiddenKinds) as SavedView['filter']['hiddenKinds'],
+      search: filterStore.search,
+      domain: filterStore.domain,
+    };
+    const cam = sigma?.getCamera().getState() ?? { x: 0.5, y: 0.5, ratio: 1, angle: 0 };
+    return {
+      filter,
+      focusStack: focusStack.map((f) => ({ ...f })),
+      camera: { x: cam.x, y: cam.y, ratio: cam.ratio, angle: cam.angle },
+    };
+  }
+
+  // Day 11 — apply a stored view to the live graph. Order matters: filter
+  // first (drives which nodes are visible), then focusStack (may narrow
+  // further), then camera (animates to the remembered viewport). Wrapped in
+  // try/catch so a bad stored view can't wedge the panel.
+  function applySavedView(view: SavedView): void {
+    try {
+      const hidden = new Set(view.filter.hiddenKinds ?? []);
+      filterStore.setHiddenKinds(hidden);
+      filterStore.setSearch(view.filter.search ?? '');
+      filterStore.setDomain(FilterStore.coerceDomain(view.filter.domain));
+      focusStack = view.focusStack.map((f) => ({ ...f }));
+      if (sigma && view.camera) {
+        const cam = sigma.getCamera();
+        cam.animate(
+          {
+            x: view.camera.x,
+            y: view.camera.y,
+            ratio: view.camera.ratio,
+            angle: view.camera.angle ?? 0,
+          },
+          { duration: 250 },
+        );
+      }
+      status = `loaded saved view: ${view.name}`;
+    } catch (e) {
+      console.warn('[unity-index-graph] apply saved view failed:', e);
+      status = `could not load saved view "${view.name}"`;
+    }
+  }
+
+  // Day 11 Task 4 — PNG export. Compose Sigma's per-layer canvases, encode
+  // to base64, hand to the host's save dialog. Uses the shared save-file
+  // endpoint so SVG (Task 5) and JSON (Task 6) round-trip the same way.
+  async function exportViewportPng(): Promise<void> {
+    if (!bridgeRef || bridgeRef.host === 'standalone' || !sigma) {
+      throw new Error('export unavailable — no host bridge');
+    }
+    const bytes = await renderViewportPng(sigma);
+    const res = await saveFile(bridgeRef.bridge, {
+      defaultName: defaultExportName('png'),
+      kind: 'png',
+      contentBase64: bytesToBase64(bytes),
+    });
+    if (res.saved && res.path) {
+      status = `exported PNG → ${res.path}`;
+    } else if (!res.saved) {
+      status = 'PNG export cancelled';
+    }
+  }
+
+  // Suggests `unity-graph-2026-07-01.<ext>` so multiple exports don't
+  // collide by default. The user renames in the save dialog anyway.
+  function defaultExportName(ext: 'png' | 'svg' | 'json'): string {
+    const stamp = new Date().toISOString().slice(0, 10);
+    return `unity-graph-${stamp}.${ext}`;
+  }
+
+  // Day 11 Task 6 — JSON export. Serializes the *live* graphology graph
+  // (not just the last snapshot) so any code-edge expansions land in the
+  // file, then wraps everything in the v1 export envelope with saved
+  // views and producer metadata attached.
+  async function exportGraphJson(): Promise<void> {
+    if (!bridgeRef || bridgeRef.host === 'standalone' || !currentGraph || !lastSnapshot) {
+      throw new Error('export unavailable — no host bridge or graph');
+    }
+    const producer = bridgeRef.host === 'rider' ? 'rider' : 'vscode';
+    const doc = assembleExportDocument({
+      lastSnapshot,
+      liveGraph: currentGraph,
+      savedViews: savedViewsStore.views,
+      producer,
+      // Stamped from the build; both extensions ship this in sync per
+      // CLAUDE.md's version rule. Not fatal if missing — the field is
+      // best-effort provenance.
+      producerVersion: EXPORT_PRODUCER_VERSION,
+    });
+    const res = await saveFile(bridgeRef.bridge, {
+      defaultName: defaultExportName('json'),
+      kind: 'json',
+      contentBase64: stringToBase64(JSON.stringify(doc, null, 2)),
+    });
+    if (res.saved && res.path) {
+      status = `exported graph → ${res.path}`;
+    } else if (!res.saved) {
+      status = 'JSON export cancelled';
+    }
+  }
+
+  // Bumped in lockstep with gradle.properties#pluginVersion and
+  // vscode-extension/package.json#version per CLAUDE.md rule 3.
+  const EXPORT_PRODUCER_VERSION = '0.5.11';
+
+  // Day 11 Task 5 — SVG export. Hand-rolled vector serialization of the
+  // current viewport, reusing the same style colors the canvas renderer
+  // uses so the file matches what's on screen.
+  async function exportViewportSvg(): Promise<void> {
+    if (!bridgeRef || bridgeRef.host === 'standalone' || !sigma) {
+      throw new Error('export unavailable — no host bridge');
+    }
+    const svg = renderViewportSvg(sigma);
+    const res = await saveFile(bridgeRef.bridge, {
+      defaultName: defaultExportName('svg'),
+      kind: 'svg',
+      contentBase64: stringToBase64(svg),
+    });
+    if (res.saved && res.path) {
+      status = `exported SVG → ${res.path}`;
+    } else if (!res.saved) {
+      status = 'SVG export cancelled';
     }
   }
 
@@ -1187,6 +1400,10 @@
   // bar — no toast system yet, the status line is the only visible channel.
   async function dispatchOpenForNode(nodeId: string): Promise<void> {
     if (!bridgeRef || bridgeRef.host === 'standalone' || !currentGraph) return;
+    if (offlineDoc) {
+      status = 'offline mode: file open disabled (imported graph)';
+      return;
+    }
     if (!currentGraph.hasNode(nodeId)) return;
     const attrs = currentGraph.getNodeAttributes(nodeId) as Record<string, unknown>;
     const filePath = typeof attrs.path === 'string' ? attrs.path : undefined;
@@ -1216,6 +1433,20 @@
 
 <div class="root">
   <div class="status" class:status-error={viewState === 'error'}>{status}</div>
+  {#if offlineDoc}
+    <!-- Day 11 Task 9 — offline banner. Names the imported project + when
+         the export was minted so users know why click-through is greyed
+         out. Fixed to the top so it survives sidebar scrolling. -->
+    <div class="offline-banner" role="status">
+      <span class="offline-tag">Offline</span>
+      <span class="offline-copy">
+        Viewing imported graph: <b>{offlineDoc.meta?.sourceProject ?? 'unknown project'}</b>
+        {#if offlineDoc.exportedAt}
+          · exported {new Date(offlineDoc.exportedAt).toLocaleString()}
+        {/if}
+      </span>
+    </div>
+  {/if}
   <!-- Suppress the browser's native context menu over the graph area so it
        doesn't overlap our own ContextMenu. Rider's JCEF webview shows the
        default menu (back/forward/view source) by default; VS Code webviews
@@ -1234,8 +1465,17 @@
         standalone={bridgeRef?.host === 'standalone'}
         {presetBusy}
         onShowMonoBehaviours={() => { void showMonoBehaviourSubclasses(); }}
+        bridge={bridgeRef && bridgeRef.host !== 'standalone' ? bridgeRef.bridge : null}
+        {captureCurrentView}
+        onLoadSavedView={applySavedView}
       />
       <DomainToggle />
+      <ExportBar
+        standalone={bridgeRef?.host === 'standalone'}
+        onExportPng={exportViewportPng}
+        onExportSvg={exportViewportSvg}
+        onExportJson={exportGraphJson}
+      />
       <Legend present={presentEdgeKinds} />
       <SearchBar totalNodes={currentGraph?.order ?? 0} />
       <Breadcrumb
@@ -1305,6 +1545,34 @@
   }
   .status-error {
     color: #ff6b6b;
+  }
+  /* Day 11 Task 9 — offline banner: a slim amber strip under the status
+     line so users don't miss why click-through went dark. */
+  .offline-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    background: #3d2f10;
+    color: #f6d8a0;
+    border-bottom: 1px solid #5a4419;
+    font-size: 11.5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .offline-tag {
+    background: #b98c2b;
+    color: #1a1a1a;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .offline-copy {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .canvas-wrap {
     position: relative;

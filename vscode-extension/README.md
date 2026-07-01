@@ -87,6 +87,28 @@ for use with the stdio bridge.
 - **Unity Index: Stop MCP Server**
 - **Unity Index: Restart MCP Server**
 - **Unity Index: Show Logs**
+- **Unity Index: Open Graph** — reveal the graph viewer panel.
+- **Unity Index: Open Graph from File…** — load a previously exported
+  `unity_graph_export` JSON for offline browsing. Click-through to files
+  is disabled in offline mode; a banner names the source project.
+
+## Graph exports (Day 11)
+
+The graph panel's top-right toolbar offers three exports, all routed
+through the host save dialog:
+
+- **PNG** — composites Sigma's node/edge/label canvases into a raster
+  image matching what's on screen.
+- **SVG** — vector export walked from graphology + the current camera;
+  reuses on-screen colors so PNG and SVG look identical.
+- **JSON** — full `ExportDocument` (schema v1) with snapshot, saved
+  views, and producer meta. Re-loadable via
+  **Unity Index: Open Graph from File…**.
+
+Saved views (filter + focus stack + camera) live in the FilterSidebar's
+"Saved views" section and persist per workspace. The same JSON envelope
+is also available server-side as the `unity_graph_export` MCP tool for
+scripted workflows.
 
 ## Connecting an MCP client
 
