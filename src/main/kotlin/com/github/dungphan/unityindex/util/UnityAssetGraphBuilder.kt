@@ -61,8 +61,17 @@ object UnityAssetGraphBuilder {
     /**
      * Public entry point. Synchronous + read-only — caller is responsible for
      * read-action wrapping if needed (we touch VFS, not PSI).
+     *
+     * `progress`, when non-null, is notified during the asset walk so the
+     * graph webview can render a live per-file counter. VFS walk = lazy, so
+     * we emit `current` without a `total` (see [GraphBuildProgress]). Ignored
+     * on the MCP tool path (no UI channel).
      */
-    fun build(project: Project, request: GraphSnapshotRequest): GraphSnapshotResponse {
+    fun build(
+        project: Project,
+        request: GraphSnapshotRequest,
+        progress: GraphBuildProgress? = null,
+    ): GraphSnapshotResponse {
         val basePath = project.basePath
             ?: throw IllegalStateException("Cannot resolve project basePath")
         val projectDir = LocalFileSystem.getInstance().findFileByPath(basePath)
@@ -120,6 +129,10 @@ object UnityAssetGraphBuilder {
             @Suppress("UNUSED_VARIABLE") val _g = guid
         }
 
+        // Per-file counter for the progress reporter. Incremented only for files
+        // that pass the extension filter (the ones that will do real work), so
+        // the number the user sees matches the "N asset files" phrasing.
+        var scannedAssets = 0
         VfsUtilCore.visitChildrenRecursively(projectDir, object : VirtualFileVisitor<Unit>() {
             override fun visitFile(file: VirtualFile): Boolean {
                 if (file.isDirectory) return file.name !in SKIP_DIRS
@@ -127,6 +140,16 @@ object UnityAssetGraphBuilder {
                 if (ext !in ASSET_EXTENSIONS) return true
 
                 try {
+                    scannedAssets += 1
+                    // Report on every file — the emitter throttles before it
+                    // hits the wire, so unconditional reports here keep the
+                    // builder ignorant of the transport rate.
+                    progress?.report(
+                        phase = "scan",
+                        current = scannedAssets,
+                        total = null,
+                        message = file.name,
+                    )
                     val rel = relativize(file.path, basePath)
                     val ownerGuid = guidResolver.getGuidForPath(file.path) ?: return true
                     val docs = UnityYamlParser.parse(file)
@@ -234,6 +257,12 @@ object UnityAssetGraphBuilder {
         })
 
         // --- Pass 2: resolve deferred edge targets via the now-complete GUID→node map.
+        progress?.report(
+            phase = "resolve",
+            current = pending.size,
+            total = pending.size,
+            message = "resolving edges",
+        )
         val edges = mutableListOf<GraphEdge>()
         edges.addAll(danglingCsharpEdges)
 

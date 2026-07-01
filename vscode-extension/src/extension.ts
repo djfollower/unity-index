@@ -222,6 +222,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("unityIndex.openGraph", () => {
       GraphPanel.reveal(context.extensionUri, log, {
         getAssetIndex: () => running?.assetIndex,
+        getGraphCache: () => running?.graphCache,
         workspaceState: context.workspaceState,
       });
     }),

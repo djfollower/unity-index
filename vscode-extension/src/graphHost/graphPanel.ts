@@ -3,6 +3,8 @@ import * as vscode from "vscode";
 
 import type {
   BridgeEnvelope,
+  ProgressEnvelope,
+  ProgressPayload,
   RequestEnvelope,
   ResponseEnvelope,
 } from "@unity-index/graph-core";
@@ -90,9 +92,26 @@ export class GraphPanel {
     if (env.kind !== "request") return;
 
     const req = env as RequestEnvelope;
+    // Progress emitter for this in-flight request. Any long-running handler
+    // (unity_graph_snapshot on a very big project) can call it to reset the
+    // webview's inter-message timeout. Stops posting after the final response
+    // to avoid stray heartbeats leaking into future requests.
+    let stopped = false;
+    const emit = (payload: ProgressPayload | undefined): void => {
+      if (stopped) return;
+      const env: ProgressEnvelope = {
+        kind: "progress",
+        id: req.id,
+        type: req.type,
+        payload,
+      };
+      this.panel.webview.postMessage(env);
+    };
     let response: ResponseEnvelope;
     try {
-      const payload = await dispatchRequest(req.type, req.payload, this.hostCtx);
+      const payload = await dispatchRequest(req.type, req.payload, this.hostCtx, {
+        onProgress: emit,
+      });
       response = {
         kind: "response",
         id: req.id,
@@ -108,6 +127,8 @@ export class GraphPanel {
         type: req.type,
         error: { message },
       };
+    } finally {
+      stopped = true;
     }
     this.panel.webview.postMessage(response);
   }

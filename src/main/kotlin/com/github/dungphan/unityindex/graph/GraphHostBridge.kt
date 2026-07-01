@@ -10,6 +10,9 @@ import com.intellij.ui.jcef.JBCefJSQuery
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 // Per-browser JS↔Kotlin bridge for the graph webview.
 //
 // Wire format mirrors graph/core/src/host-bridge.ts: messages are JSON-
@@ -86,8 +89,9 @@ class GraphHostBridge(
 
         // Dispatch off the EDT — handler may do PSI work in the future.
         ApplicationManager.getApplication().executeOnPooledThread {
+            val progress = ProgressEmitter(env.id, env.type)
             val response = try {
-                val payload = GraphHostHandlers.dispatch(env.type, env.payload, project)
+                val payload = GraphHostHandlers.dispatch(env.type, env.payload, project, progress)
                 BridgeEnvelope(kind = "response", id = env.id, type = env.type, payload = payload)
             } catch (t: Throwable) {
                 LOG.warn("graph: handler for '${env.type}' threw", t)
@@ -97,9 +101,133 @@ class GraphHostBridge(
                     type = env.type,
                     error = BridgeError(t.message ?: t.javaClass.simpleName),
                 )
+            } finally {
+                progress.stop()
             }
             sendToWebview(response)
         }
+    }
+
+    // Per-request progress channel. Handlers grab this to emit heartbeats
+    // during long-running work; the webview resets its request timeout on
+    // every heartbeat, so a very big project's cold-start scan can take
+    // minutes without tripping the 60s inter-message timeout in
+    // graph/webview/src/lib/snapshot.ts.
+    inner class ProgressEmitter(
+        private val requestId: String,
+        private val requestType: String,
+    ) {
+        @Volatile private var stopped = false
+        // Last payload the builder reported. Retained so the periodic
+        // heartbeat can re-emit it during phases where the builder is doing
+        // work but hasn't ticked (e.g., the initial VFS walk before it hits
+        // the first asset file). Guarded by no lock — reads and writes are
+        // both plain volatile references; races only cost a duplicate emit.
+        @Volatile private var lastPayload: JsonElement? = null
+        // Throttle wall-clock so per-file reports don't flood the webview.
+        // 250ms strikes the balance where a 10k-file scan sends ~40 messages
+        // instead of 10k, and the UI updates at a rate humans can read.
+        @Volatile private var lastEmitAtMs: Long = 0L
+
+        fun stop() {
+            stopped = true
+        }
+
+        fun emit(payload: JsonElement) {
+            if (stopped) return
+            lastPayload = payload
+            val env = BridgeEnvelope(
+                kind = "progress",
+                id = requestId,
+                type = requestType,
+                payload = payload,
+            )
+            sendToWebview(env)
+        }
+
+        // Convenience: emit a phase/message payload. Shape matches
+        // graph/core/src/host-bridge.ts ProgressPayload.
+        fun emit(phase: String?, message: String?, current: Int? = null, total: Int? = null) {
+            emit(buildPayload(phase, message, current, total))
+        }
+
+        /**
+         * Throttled per-file reporter for [GraphBuildProgress]. Always
+         * updates the retained payload so the next heartbeat sees fresh
+         * data, but only crosses the wire if [THROTTLE_MS] has elapsed
+         * since the last emit. Guarantees one final emit at each phase
+         * transition (`phase` change) so the UI never gets stuck showing
+         * "scanning" while resolution is running.
+         */
+        fun report(phase: String, current: Int, total: Int?, message: String?) {
+            if (stopped) return
+            val payload = buildPayload(phase, message, current, total)
+            lastPayload = payload
+            val now = System.currentTimeMillis()
+            val prev = lastEmitAtMs
+            val phaseChanged = (lastReportedPhase != phase)
+            if (phaseChanged || now - prev >= PROGRESS_THROTTLE_MS) {
+                lastEmitAtMs = now
+                lastReportedPhase = phase
+                val env = BridgeEnvelope(
+                    kind = "progress",
+                    id = requestId,
+                    type = requestType,
+                    payload = payload,
+                )
+                sendToWebview(env)
+            }
+        }
+
+        @Volatile private var lastReportedPhase: String? = null
+
+        private fun buildPayload(
+            phase: String?,
+            message: String?,
+            current: Int?,
+            total: Int?,
+        ): JsonElement = buildJsonObject {
+            if (phase != null) put("phase", JsonPrimitive(phase))
+            if (message != null) put("message", JsonPrimitive(message))
+            if (current != null) put("current", JsonPrimitive(current))
+            if (total != null) put("total", JsonPrimitive(total))
+        }
+
+        /**
+         * Start a periodic heartbeat that fires until `stop()` is called or
+         * [block] completes. Each fire re-emits the latest payload the
+         * builder reported through [report], or a fallback phase/message if
+         * nothing has been reported yet. The heartbeat exists to cover
+         * phases where no per-file report fires (e.g., long-running
+         * aggregation) so the webview's inter-message timeout never trips.
+         * Runs `block` on the calling thread; the heartbeat runs on a
+         * daemon executor.
+         */
+        fun <T> withHeartbeat(
+            intervalMs: Long,
+            phase: String,
+            initialMessage: String? = null,
+            block: () -> T,
+        ): T {
+            emit(phase, initialMessage)
+            val executor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+                Thread(r, "unity-index-graph-progress-$requestId").apply { isDaemon = true }
+            }
+            val fallback = buildPayload(phase, initialMessage, null, null)
+            val future = executor.scheduleAtFixedRate(
+                { emit(lastPayload ?: fallback) },
+                intervalMs,
+                intervalMs,
+                java.util.concurrent.TimeUnit.MILLISECONDS,
+            )
+            return try {
+                block()
+            } finally {
+                future.cancel(false)
+                executor.shutdownNow()
+            }
+        }
+
     }
 
     private fun sendToWebview(env: BridgeEnvelope) {
@@ -146,6 +274,10 @@ class GraphHostBridge(
         // pathological large-source thresholds while keeping the chunk count
         // bounded (a 50 MB payload is ~400 chunks).
         private const val CHUNK_BYTES = 128 * 1024
+        // Per-file report throttle. 250ms balances "UI feels live" against
+        // "webview isn't drowning in messages" — a 50k-file scan emits
+        // ~1 msg/s at this rate.
+        private const val PROGRESS_THROTTLE_MS = 250L
         private val nextEventId = java.util.concurrent.atomic.AtomicLong(0)
     }
 }

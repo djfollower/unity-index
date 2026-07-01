@@ -61,11 +61,28 @@ const yieldEventLoop = () => new Promise<void>((r) => setImmediate(r));
  * equivalent for the same project (the cross-impl gate from
  * docs/graph-day2-tasks.md Task 8).
  */
+/**
+ * Progress reporter mirror of Kotlin's `GraphBuildProgress`. Called on every
+ * asset file as the builder scans them, then once at the resolve phase. The
+ * caller (the graph panel host) is responsible for throttling before forwarding
+ * to the webview — see `graphHost/hostHandlers.ts:startProgressReporter`.
+ *
+ * `total` is the known asset-file count when available; the VS Code side has
+ * a precomputed `assetFilePaths` array, so it can render a real percentage.
+ */
+export type GraphBuildProgress = (
+  phase: string,
+  current: number,
+  total: number | undefined,
+  message: string | undefined,
+) => void;
+
 export async function buildAssetGraph(
   rootPath: string,
   index: AssetIndexLike,
   request: SnapshotRequest,
   signal?: AbortSignal,
+  progress?: GraphBuildProgress,
 ): Promise<SnapshotResponse> {
   const toRel = (absPath: string): string =>
     path.relative(rootPath, absPath).split(path.sep).join("/");
@@ -108,11 +125,22 @@ export async function buildAssetGraph(
   let skippedComponentFields = 0;
   let counter = 0;
 
+  const totalAssetFiles = index.assetFilePaths.length;
   for (const file of index.assetFilePaths) {
     if (++counter % YIELD_EVERY === 0) {
       await yieldEventLoop();
       if (signal?.aborted) throw new Error("buildAssetGraph aborted");
     }
+    // Report BEFORE the extension filter so the counter tracks true progress
+    // through `assetFilePaths` — otherwise a project full of e.g. .png files
+    // would jump from 0 to N with nothing in between. The reporter throttles
+    // on the host side, so unconditional calls here are cheap.
+    progress?.(
+      "scan",
+      counter,
+      totalAssetFiles,
+      path.basename(file),
+    );
     const ext = path.extname(file).toLowerCase();
     if (!ASSET_FILE_EXTENSIONS.has(ext)) continue;
 
@@ -238,6 +266,7 @@ export async function buildAssetGraph(
   }
 
   // --- Pass 2: resolve deferred edge targets.
+  progress?.("resolve", pending.length, pending.length, "resolving edges");
   const edges: GraphEdge[] = [...dangling];
   interface BindingBucket {
     source: string;

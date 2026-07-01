@@ -34,10 +34,30 @@ export interface EventEnvelope<T = unknown> {
   payload: T;
 }
 
+// Progress heartbeat for long-running requests. Carries the request `id` so
+// the client-side `request()` can match it to its pending timer and reset the
+// inter-message timeout. Payload is deliberately loose — the webview only
+// needs to know "still working", but hosts are free to include phase/message
+// /counters that a future progress UI can render.
+export interface ProgressEnvelope<T = unknown> {
+  kind: 'progress';
+  id: RequestId;
+  type: string;
+  payload?: T;
+}
+
+export interface ProgressPayload {
+  phase?: string;
+  message?: string;
+  current?: number;
+  total?: number;
+}
+
 export type BridgeEnvelope =
   | RequestEnvelope
   | ResponseEnvelope
-  | EventEnvelope;
+  | EventEnvelope
+  | ProgressEnvelope;
 
 export interface HostBridge {
   postToHost(envelope: BridgeEnvelope): void;
@@ -55,10 +75,17 @@ const newRequestId = (): RequestId => {
 };
 
 export interface RequestOptions {
-  // Reject the returned promise if no response arrives within this many ms.
-  // Defaults to 30s, long enough for cold-start MCP calls but short enough
-  // that a wedged host doesn't hang the UI forever.
+  // Reject the returned promise if no INTER-MESSAGE traffic for this request
+  // (progress heartbeat or final response) arrives within this many ms.
+  // Defaults to 30s — long enough for cold-start MCP calls without progress
+  // support, short enough that a wedged host doesn't hang the UI forever.
+  // Hosts that emit `progress` envelopes reset this timer on every heartbeat,
+  // so the effective wall-clock ceiling is (heartbeatInterval + timeoutMs).
   timeoutMs?: number;
+  // Optional: called when a `progress` envelope with matching id arrives.
+  // Timeout resets whether or not this is provided — this hook is only for
+  // rendering progress UI in the caller.
+  onProgress?: (payload: ProgressPayload | undefined) => void;
 }
 
 export function request<TReq, TRes>(
@@ -71,12 +98,24 @@ export function request<TReq, TRes>(
   const timeoutMs = options.timeoutMs ?? 30_000;
 
   return new Promise<TRes>((resolve, reject) => {
-    const timer = setTimeout(() => {
+    let timer = setTimeout(onTimeout, timeoutMs);
+    function onTimeout(): void {
       unsubscribe();
       reject(new Error(`bridge request '${type}' timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+    }
+    function resetTimer(): void {
+      clearTimeout(timer);
+      timer = setTimeout(onTimeout, timeoutMs);
+    }
 
     const unsubscribe = bridge.onFromHost((env) => {
+      if (env.kind === 'progress' && env.id === id) {
+        resetTimer();
+        if (options.onProgress) {
+          options.onProgress(env.payload as ProgressPayload | undefined);
+        }
+        return;
+      }
       if (env.kind !== 'response' || env.id !== id) return;
       clearTimeout(timer);
       unsubscribe();

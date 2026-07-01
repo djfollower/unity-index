@@ -2,6 +2,8 @@ export type {
   BridgeEnvelope,
   EventEnvelope,
   HostBridge,
+  ProgressEnvelope,
+  ProgressPayload,
   RequestEnvelope,
   RequestId,
   RequestOptions,

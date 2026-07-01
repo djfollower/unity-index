@@ -7,8 +7,8 @@ import com.github.dungphan.unityindex.tools.models.DiagnosticsBatchResponse
 import com.github.dungphan.unityindex.tools.models.GraphSnapshotRequest
 import com.github.dungphan.unityindex.tools.unity.UnityGraphCodeEdgesTool
 import com.github.dungphan.unityindex.tools.unity.UnityGraphDiagnosticsTool
+import com.github.dungphan.unityindex.util.GraphBuildProgress
 import com.github.dungphan.unityindex.util.GraphClassAnchors
-import com.github.dungphan.unityindex.util.UnityAssetGraphBuilder
 import com.intellij.ide.actions.RevealFileAction
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionPlaces
@@ -17,7 +17,6 @@ import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.PlatformDataKeys
 import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
@@ -42,10 +41,15 @@ object GraphHostHandlers {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun dispatch(type: String, payload: JsonElement?, project: Project?): JsonElement {
+    fun dispatch(
+        type: String,
+        payload: JsonElement?,
+        project: Project?,
+        progress: GraphHostBridge.ProgressEmitter? = null,
+    ): JsonElement {
         return when (type) {
             GraphWireTypes.HELLO -> handleHello(payload)
-            GraphWireTypes.SNAPSHOT -> handleSnapshot(payload, project)
+            GraphWireTypes.SNAPSHOT -> handleSnapshot(payload, project, progress)
             GraphWireTypes.OPEN_FILE -> handleOpenFile(payload, project)
             GraphWireTypes.FIND_USAGES -> handleFindUsages(payload, project)
             GraphWireTypes.REVEAL_IN_EXPLORER -> handleRevealInExplorer(payload, project)
@@ -99,7 +103,11 @@ object GraphHostHandlers {
         return json.encodeToJsonElement(DiagnosticsBatchResponse.serializer(), response)
     }
 
-    private fun handleSnapshot(payload: JsonElement?, project: Project?): JsonElement {
+    private fun handleSnapshot(
+        payload: JsonElement?,
+        project: Project?,
+        progress: GraphHostBridge.ProgressEmitter?,
+    ): JsonElement {
         // The bridge is bound to exactly one Project per tool window; if it's
         // null the panel was opened outside a project context (shouldn't happen
         // in practice). Stable error string so the webview can surface it.
@@ -115,12 +123,35 @@ object GraphHostHandlers {
             throw IllegalArgumentException("invalid_snapshot_request: ${e.message}")
         }
 
-        // UnityAssetGraphBuilder.build walks VFS and needs a read action.
-        // We're already on a pooled thread (per GraphHostBridge), but VFS
-        // access requires a read lock — ReadAction.compute is the
-        // non-suspending equivalent of the tool path's suspendingReadAction.
-        val response = ReadAction.compute<_, RuntimeException> {
-            UnityAssetGraphBuilder.build(project, request)
+        // 0.5.10 — route through GraphSnapshotCache so the panel reuses the
+        // same cached revision the MCP tool path builds (was: direct
+        // UnityAssetGraphBuilder.build under ReadAction.compute — every panel
+        // open on a very big project paid the full walk again, and the read
+        // lock could starve write-intent actions on the EDT for minutes).
+        // The cache internally serialises the build on a plain lock; VFS
+        // walks + raw YAML parsing don't need a platform read action.
+        //
+        // Per-file progress: the builder invokes the reporter on every asset
+        // file it inspects. The emitter throttles at 250ms so a 50k-file scan
+        // sends ~1 msg/s across the wire while the UI still feels live. The
+        // heartbeat covers the aggregation phase between the walk finishing
+        // and the response being encoded — no per-file ticks there, but the
+        // 60s inter-message timeout on the webview side still needs to see
+        // traffic. Emitter is a no-op if progress is null (tests / direct
+        // dispatch calls without a bridge).
+        val response = if (progress != null) {
+            val reporter = GraphBuildProgress { phase, current, total, message ->
+                progress.report(phase, current, total, message)
+            }
+            progress.withHeartbeat(
+                intervalMs = 15_000L,
+                phase = "snapshot",
+                initialMessage = "scanning Unity assets",
+            ) {
+                GraphSnapshotCache.get(project).snapshot(request, reporter)
+            }
+        } else {
+            GraphSnapshotCache.get(project).snapshot(request)
         }
 
         // Day 8.4 — opt-in class-anchor projection. The MCP tool path applies

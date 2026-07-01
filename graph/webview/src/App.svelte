@@ -663,7 +663,42 @@
       // Day 8.5 — opt in to class anchors so Day 8 code-edge expansion has
       // stable IDs to hang results on. The host applies the projection
       // after its cache lookup (Day 8.4), so this stays cheap.
-      const res = await fetchSnapshot(bridgeRef.bridge, { include_class_anchors: true });
+      const res = await fetchSnapshot(
+        bridgeRef.bridge,
+        { include_class_anchors: true },
+        {
+          onProgress: (p) => {
+            // Very-big-project cold start streams per-file reports from the
+            // host, throttled to ~4/s. Reflect the latest phase / count /
+            // percent in the status line so the user sees real progress
+            // instead of a wedged spinner.
+            if (viewState !== 'loading') return;
+            const parts: string[] = [];
+            const phase = p?.phase;
+            if (phase === 'scan') parts.push('scanning assets');
+            else if (phase === 'resolve') parts.push('resolving edges');
+            else if (phase) parts.push(phase);
+            if (
+              typeof p?.current === 'number' &&
+              typeof p?.total === 'number' &&
+              p.total > 0
+            ) {
+              const pct = Math.min(100, Math.floor((p.current / p.total) * 100));
+              parts.push(`${p.current.toLocaleString()} / ${p.total.toLocaleString()} (${pct}%)`);
+            } else if (typeof p?.current === 'number') {
+              parts.push(`${p.current.toLocaleString()} files`);
+            }
+            if (p?.message && phase !== 'scan') {
+              // Suppress per-file filename on the scan phase to avoid strobing;
+              // count is the useful signal there. Show messages otherwise.
+              parts.push(p.message);
+            }
+            status = parts.length
+              ? `indexing project graph — ${parts.join(' · ')}`
+              : 'indexing project graph…';
+          },
+        },
+      );
       expandedCodeAnchors = new Set();
       codeEdgeInflight.clear();
       lastSnapshot = res;

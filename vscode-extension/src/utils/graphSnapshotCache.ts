@@ -11,7 +11,11 @@ import {
   type Warning,
 } from "@unity-index/graph-core";
 import { ProjectContext } from "../server/projectResolver";
-import { AssetIndexLike, buildAssetGraph } from "./unityAssetGraphBuilder";
+import {
+  AssetIndexLike,
+  buildAssetGraph,
+  GraphBuildProgress,
+} from "./unityAssetGraphBuilder";
 
 interface CachedRevision {
   /** Monotonic counter — see snapshot-delta-wire.ts. */
@@ -75,9 +79,10 @@ export class GraphSnapshotCache {
     index: AssetIndexLike,
     request: SnapshotRequest,
     signal?: AbortSignal,
+    progress?: GraphBuildProgress,
   ): Promise<SnapshotResponse> {
     const entry = this.ensureEntry(project);
-    const unfiltered = await this.ensureBase(entry, project, index, signal);
+    const unfiltered = await this.ensureBase(entry, project, index, signal, progress);
 
     const isUnfiltered =
       !request.include_kinds?.length &&
@@ -292,10 +297,11 @@ export class GraphSnapshotCache {
     project: ProjectContext,
     index: AssetIndexLike,
     signal?: AbortSignal,
+    progress?: GraphBuildProgress,
   ): Promise<GraphSnapshot> {
     if (entry.current) return entry.current.snapshot;
     if (entry.inFlight) return entry.inFlight;
-    const build = this.buildUnfiltered(project, index, signal);
+    const build = this.buildUnfiltered(project, index, signal, progress);
     entry.inFlight = build;
     try {
       const snapshot = await build;
@@ -313,12 +319,14 @@ export class GraphSnapshotCache {
     project: ProjectContext,
     index: AssetIndexLike,
     signal?: AbortSignal,
+    progress?: GraphBuildProgress,
   ): Promise<GraphSnapshot> {
     const response = await buildAssetGraph(
       project.rootPath,
       index,
       {} as SnapshotRequest,
       signal,
+      progress,
     );
     return response.snapshot;
   }

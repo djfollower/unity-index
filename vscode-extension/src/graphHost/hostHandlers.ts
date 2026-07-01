@@ -23,6 +23,7 @@ import type {
   HelloGraphResponse,
   OpenFileRequest,
   OpenFileResponse,
+  ProgressPayload,
   RevealInExplorerRequest,
   RevealInExplorerResponse,
   SetFilterStateRequest,
@@ -34,6 +35,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { resolveFilePath, resolveProject } from "../server/projectResolver";
 import { UnityAssetIndexManager } from "../utils/unityAssetIndexManager";
+import { GraphSnapshotCache } from "../utils/graphSnapshotCache";
 import { buildAssetGraph } from "../utils/unityAssetGraphBuilder";
 import { harvestCodeEdges } from "../tools/unity/unityGraphCodeEdgesTool";
 import { harvestDiagnostics } from "../tools/unity/unityGraphDiagnosticsTool";
@@ -66,16 +68,29 @@ export interface HostHandlerContext {
    */
   getAssetIndex: () => UnityAssetIndexManager | undefined;
   /**
+   * Returns the MCP server's GraphSnapshotCache. Lazy so the panel outlives
+   * server restarts; if `undefined`, snapshot falls back to a direct build.
+   */
+  getGraphCache?: () => GraphSnapshotCache | undefined;
+  /**
    * VS Code's per-workspace key/value store. Holds the Day 5 filter state.
    * Passed in (not imported) so unit tests can stub it.
    */
   workspaceState: vscode.Memento;
 }
 
+export interface DispatchOptions {
+  // Progress heartbeat callback. Long-running handlers (snapshot cold start
+  // on a very big project) invoke it periodically so the webview resets its
+  // inter-message timeout. Optional — handlers must tolerate `undefined`.
+  onProgress?: (payload: ProgressPayload | undefined) => void;
+}
+
 export async function dispatchRequest(
   type: string,
   payload: unknown,
   ctx: HostHandlerContext,
+  options: DispatchOptions = {},
 ): Promise<unknown> {
   switch (type) {
     case HELLO_GRAPH_TYPE: {
@@ -88,7 +103,7 @@ export async function dispatchRequest(
       return res;
     }
     case SNAPSHOT_GRAPH_TYPE: {
-      return handleSnapshot(payload, ctx);
+      return handleSnapshot(payload, ctx, options.onProgress);
     }
     case OPEN_FILE_TYPE: {
       return handleOpenFile(payload);
@@ -126,6 +141,78 @@ export async function dispatchRequest(
 // rather than crashing the panel.
 function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === "string");
+}
+
+/**
+ * Wraps the raw progress emit with two behaviours:
+ *   1. `report(...)` — a throttled per-file reporter matching Kotlin's
+ *      `GraphBuildProgress`. Coalesces bursts (a 50k-file scan sends ~1
+ *      msg/s instead of 50k) and retains the last payload.
+ *   2. A periodic heartbeat that re-emits the last known payload every
+ *      `heartbeatMs` — covers phases where the builder isn't emitting
+ *      per-file (initial VFS/index walk, aggregation pass) so the
+ *      webview's inter-message timeout never trips.
+ *
+ * Call `stop()` before the response is posted so no stray heartbeats leak
+ * into the next request's timeline.
+ */
+function startProgressReporter(
+  emit: (payload: ProgressPayload | undefined) => void,
+  fallbackPhase: string,
+  fallbackMessage: string,
+  heartbeatMs: number,
+): {
+  report: (
+    phase: string,
+    current: number,
+    total: number | undefined,
+    message: string | undefined,
+  ) => void;
+  stop: () => void;
+} {
+  const THROTTLE_MS = 250;
+  let stopped = false;
+  let last: ProgressPayload = { phase: fallbackPhase, message: fallbackMessage };
+  let lastEmitAt = 0;
+  let lastPhase: string | undefined;
+
+  // Fire once immediately so the UI flips from "loading" to "indexing" copy
+  // as soon as the request lands, rather than after the first throttle window.
+  emit(last);
+
+  const heartbeat = setInterval(() => {
+    if (stopped) return;
+    emit(last);
+  }, heartbeatMs);
+
+  const report = (
+    phase: string,
+    current: number,
+    total: number | undefined,
+    message: string | undefined,
+  ): void => {
+    if (stopped) return;
+    const payload: ProgressPayload = { phase };
+    if (message !== undefined) payload.message = message;
+    payload.current = current;
+    if (total !== undefined) payload.total = total;
+    last = payload;
+    const now = Date.now();
+    const phaseChanged = lastPhase !== phase;
+    if (phaseChanged || now - lastEmitAt >= THROTTLE_MS) {
+      lastEmitAt = now;
+      lastPhase = phase;
+      emit(payload);
+    }
+  };
+
+  return {
+    report,
+    stop: () => {
+      stopped = true;
+      clearInterval(heartbeat);
+    },
+  };
 }
 
 function coerceDomain(raw: unknown): FilterState["domain"] {
@@ -200,6 +287,7 @@ async function handleDiagnostics(payload: unknown): Promise<DiagnosticsBatchResp
 async function handleSnapshot(
   payload: unknown,
   ctx: HostHandlerContext,
+  onProgress?: (payload: ProgressPayload | undefined) => void,
 ): Promise<SnapshotResponse> {
   const assetIndex = ctx.getAssetIndex();
   if (!assetIndex) {
@@ -221,14 +309,54 @@ async function handleSnapshot(
     throw new Error(text);
   }
 
-  const index = await assetIndex.get(resolved.project);
-  // buildAssetGraph already returns a fully-shaped SnapshotResponse
-  // (generated_at, stats, warnings, etc.) — same call the MCP tool makes.
   const request: SnapshotRequest = {
     ...req,
     project_path: resolved.project.rootPath,
   };
-  const response = await buildAssetGraph(resolved.project.rootPath, index, request);
+
+  // 0.5.10 — per-file progress + heartbeat. The builder emits on every asset
+  // file it inspects; the reporter throttles at 250ms so a 50k-file scan sends
+  // ~1 msg/s across the wire while the UI still feels live. The heartbeat
+  // covers the initial index-load phase (before the builder starts) and the
+  // resolve/aggregate phase (after the walk) so the 60s inter-message
+  // timeout on the webview side never trips even mid-build.
+  const reporter = onProgress
+    ? startProgressReporter(
+        onProgress,
+        "snapshot",
+        "scanning Unity assets",
+        15_000,
+      )
+    : undefined;
+  let response: SnapshotResponse;
+  try {
+    const index = await assetIndex.get(resolved.project);
+    // Prefer the MCP-shared GraphSnapshotCache — every panel open on a very
+    // big project used to pay a full walk here. The cache seeds once, then
+    // reopens are instant and file-watch invalidation reuses work with the
+    // MCP tool path. Fall back to a direct build if the panel is opened
+    // before the server publishes its cache (older extension.ts shapes).
+    const cache = ctx.getGraphCache?.();
+    if (cache) {
+      response = await cache.getSnapshot(
+        resolved.project,
+        index,
+        request,
+        undefined,
+        reporter?.report,
+      );
+    } else {
+      response = await buildAssetGraph(
+        resolved.project.rootPath,
+        index,
+        request,
+        undefined,
+        reporter?.report,
+      );
+    }
+  } finally {
+    reporter?.stop();
+  }
   // Day 8.4 — mirror the projection UnityGraphSnapshotTool.applyClassAnchors
   // does on the MCP tool path. The bridge skips that wrapper, so without
   // this the webview's `include_class_anchors: true` is silently ignored,

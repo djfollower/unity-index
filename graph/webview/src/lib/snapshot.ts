@@ -2,28 +2,33 @@
 // The host (VS Code or Rider) handles the actual unity_graph_snapshot call
 // in-process — see hostHandlers.ts / GraphHostHandlers.kt.
 //
-// 30s ceiling: real Unity projects on cold start take 5–15s for the first
-// asset-index pass. Anything over 30s is a host bug, not a slow project.
+// 0.5.10 — inter-message timeout: the host emits `progress` heartbeats every
+// ~15s while building; each heartbeat resets this timer. A very big Unity
+// project's cold-start scan can take minutes, but we still catch a wedged
+// host (no heartbeat, no response) within 60s. Callers may pass `onProgress`
+// to render an "indexing…" UI.
 
 import {
   request,
   SNAPSHOT_GRAPH_TYPE,
   type HostBridge,
+  type ProgressPayload,
   type SnapshotRequest,
   type SnapshotResponse,
 } from '@unity-index/graph-core';
 
-const SNAPSHOT_TIMEOUT_MS = 30_000;
+const SNAPSHOT_TIMEOUT_MS = 60_000;
 
 export async function fetchSnapshot(
   bridge: HostBridge,
   req: Partial<SnapshotRequest> = {},
+  options: { onProgress?: (payload: ProgressPayload | undefined) => void } = {},
 ): Promise<SnapshotResponse> {
   return request<Partial<SnapshotRequest>, SnapshotResponse>(
     bridge,
     SNAPSHOT_GRAPH_TYPE,
     req,
-    { timeoutMs: SNAPSHOT_TIMEOUT_MS },
+    { timeoutMs: SNAPSHOT_TIMEOUT_MS, onProgress: options.onProgress },
   );
 }
 

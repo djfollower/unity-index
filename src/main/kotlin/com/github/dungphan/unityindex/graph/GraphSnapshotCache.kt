@@ -8,6 +8,7 @@ import com.github.dungphan.unityindex.tools.models.GraphSnapshotRequest
 import com.github.dungphan.unityindex.tools.models.GraphSnapshotResponse
 import com.github.dungphan.unityindex.tools.models.GraphWarning
 import com.github.dungphan.unityindex.util.BurstCoalescerTiming
+import com.github.dungphan.unityindex.util.GraphBuildProgress
 import com.github.dungphan.unityindex.util.GraphSnapshotDiff
 import com.github.dungphan.unityindex.util.GraphWarningCodes
 import com.github.dungphan.unityindex.util.UnityAssetGraphBuilder
@@ -111,8 +112,11 @@ class GraphSnapshotCache(private val project: Project) : Disposable {
      * builder's filter pipeline if the request carries filters. Filtered
      * requests do NOT update the cache state — only the cold-start path does.
      */
-    fun snapshot(request: GraphSnapshotRequest): GraphSnapshotResponse {
-        val unfiltered = ensureBase()
+    fun snapshot(
+        request: GraphSnapshotRequest,
+        progress: GraphBuildProgress? = null,
+    ): GraphSnapshotResponse {
+        val unfiltered = ensureBase(progress)
         val revision = current!!.revision
 
         val isUnfiltered = request.include_kinds.isNullOrEmpty() &&
@@ -283,12 +287,12 @@ class GraphSnapshotCache(private val project: Project) : Disposable {
     // Internals
     // ------------------------------------------------------------------------
 
-    private fun ensureBase(): GraphSnapshot {
+    private fun ensureBase(progress: GraphBuildProgress? = null): GraphSnapshot {
         lock.withLock { current?.let { return it.snapshot } }
         // Build outside the lock — UnityAssetGraphBuilder walks the VFS and
         // can take seconds on a large project; holding the lock would serialise
         // all snapshot calls.
-        val built = UnityAssetGraphBuilder.build(project, GraphSnapshotRequest()).snapshot
+        val built = UnityAssetGraphBuilder.build(project, GraphSnapshotRequest(), progress).snapshot
         lock.withLock {
             // Another caller may have raced to seed; respect whoever wrote first.
             current?.let { return it.snapshot }
