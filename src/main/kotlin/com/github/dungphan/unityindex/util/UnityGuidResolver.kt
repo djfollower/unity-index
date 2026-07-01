@@ -13,19 +13,26 @@ class UnityGuidResolver(projectDir: VirtualFile) {
         val guidMap = mutableMapOf<String, String>()
         val pathMap = mutableMapOf<String, String>()
 
-        VfsUtilCore.visitChildrenRecursively(projectDir, object : VirtualFileVisitor<Unit>() {
-            override fun visitFile(file: VirtualFile): Boolean {
-                if (file.isDirectory) {
-                    val name = file.name
-                    if (name == "Library" || name == "Temp" || name == "Logs" || name == "obj") return false
+        // Unity ingests only what lives under Assets/ (user content) and
+        // Packages/ (embedded + UPM local packages). Walking the entire project
+        // root would pick up Library/, Temp/, ProjectSettings/, Build/ etc.,
+        // inflating the meta map with GUIDs Unity never resolves through.
+        val roots = listOfNotNull(projectDir.findChild("Assets"), projectDir.findChild("Packages"))
+        for (root in roots) {
+            VfsUtilCore.visitChildrenRecursively(root, object : VirtualFileVisitor<Unit>() {
+                override fun visitFile(file: VirtualFile): Boolean {
+                    if (file.isDirectory) {
+                        val name = file.name
+                        if (name == "node_modules" || name == ".git") return false
+                        return true
+                    }
+                    if (file.extension == "meta") {
+                        parseMetaFile(file, guidMap, pathMap)
+                    }
                     return true
                 }
-                if (file.extension == "meta") {
-                    parseMetaFile(file, guidMap, pathMap)
-                }
-                return true
-            }
-        })
+            })
+        }
 
         guidToPath = guidMap
         pathToGuid = pathMap

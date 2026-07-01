@@ -7,7 +7,12 @@ import { executeDocumentSymbols } from "./lspBridge";
 import { parseUnityYaml, UnityYamlDocument } from "./unityYaml";
 
 const ASSET_EXTENSIONS = new Set([".prefab", ".unity", ".asset", ".mat", ".anim", ".controller", ".playable", ".spriteatlas", ".lighting"]);
-const SKIP_DIRS = new Set(["Library", "Temp", "Logs", "obj", "bin", "node_modules", ".git"]);
+// Unity ingests only what lives under Assets/ (user content) and Packages/
+// (embedded + UPM local packages). Anything else — Library/, Temp/, Logs/,
+// ProjectSettings/, UserSettings/, Build/, tool caches — is out of scope for
+// the graph and would only inflate node counts.
+const SCAN_ROOTS = ["Assets", "Packages"];
+const SKIP_DIRS = new Set(["node_modules", ".git"]);
 const GUID_REGEX = /^guid:\s*([0-9a-fA-F]{32})\s*$/m;
 const MB_HEADER_REGEX = /^---\s+!u!(\d+)\s+&(\d+)/;
 const M_SCRIPT_GUID_REGEX = /m_Script:\s*\{[^}]*guid:\s*([0-9a-fA-F]{32})/;
@@ -142,17 +147,19 @@ export class UnityAssetIndex {
       }
     };
 
-    await walkAsync(project.rootPath, async (entry, isDir) => {
-      await tick();
-      if (isDir) return !SKIP_DIRS.has(path.basename(entry));
+    for (const sub of SCAN_ROOTS) {
+      await walkAsync(path.join(project.rootPath, sub), async (entry, isDir) => {
+        await tick();
+        if (isDir) return !SKIP_DIRS.has(path.basename(entry));
 
-      if (entry.endsWith(".meta")) {
-        await readMetaHeader(entry, guidToPath, pathToGuid);
-      } else if (ASSET_EXTENSIONS.has(path.extname(entry))) {
-        assetFiles.push(entry);
-      }
-      return true;
-    });
+        if (entry.endsWith(".meta")) {
+          await readMetaHeader(entry, guidToPath, pathToGuid);
+        } else if (ASSET_EXTENSIONS.has(path.extname(entry))) {
+          assetFiles.push(entry);
+        }
+        return true;
+      });
+    }
 
     return new UnityAssetIndex(project, guidToPath, pathToGuid, assetFiles);
   }

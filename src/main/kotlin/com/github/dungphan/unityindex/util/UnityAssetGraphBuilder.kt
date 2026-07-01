@@ -51,7 +51,12 @@ object UnityAssetGraphBuilder {
         "mat", "anim", "controller", "playable", "spriteatlas", "lighting",
         "shader", "physicMaterial", "physicsMaterial2D"
     )
-    private val SKIP_DIRS = setOf("Library", "Temp", "Logs", "obj", "bin", "node_modules", ".git")
+    // Unity ingests only what lives under Assets/ (user content) and Packages/
+    // (embedded + UPM local packages). Anything else — Library/, Temp/, Logs/,
+    // ProjectSettings/, Build/, tool caches — is out of scope for the graph
+    // and would only inflate node counts.
+    private val SCAN_ROOTS = listOf("Assets", "Packages")
+    private val SKIP_DIRS = setOf("node_modules", ".git")
 
     private const val CLASS_ID_MONOBEHAVIOUR = 114
     private const val CLASS_ID_PREFAB_INSTANCE = 1001
@@ -133,7 +138,8 @@ object UnityAssetGraphBuilder {
         // that pass the extension filter (the ones that will do real work), so
         // the number the user sees matches the "N asset files" phrasing.
         var scannedAssets = 0
-        VfsUtilCore.visitChildrenRecursively(projectDir, object : VirtualFileVisitor<Unit>() {
+        val scanRoots = SCAN_ROOTS.mapNotNull { projectDir.findChild(it) }
+        val assetVisitor = object : VirtualFileVisitor<Unit>() {
             override fun visitFile(file: VirtualFile): Boolean {
                 if (file.isDirectory) return file.name !in SKIP_DIRS
                 val ext = file.extension?.lowercase() ?: return true
@@ -254,7 +260,10 @@ object UnityAssetGraphBuilder {
                 }
                 return true
             }
-        })
+        }
+        for (root in scanRoots) {
+            VfsUtilCore.visitChildrenRecursively(root, assetVisitor)
+        }
 
         // --- Pass 2: resolve deferred edge targets via the now-complete GUID→node map.
         progress?.report(
